@@ -1,0 +1,24 @@
+model:
+  path: models/stable-diffusion-xl-base-1.0
+  device: auto
+  dtype: auto
+  allow_download: false
+method: maskattn
+checkpoint: null
+maskattn:
+  stage: mid
+  placement: encoder_decoder
+  threshold: 0.5
+  negative_value: -10000.0
+  gate_hidden_dim: 128
+prompts: data/coco_val2014_3000_prompts.jsonl
+real_images: data/coco_val2014_images
+output_dir: outputs/eval_quality_coco
+num_samples: 3000
+seed: 42
+height: 1024
+width: 1024
+num_inference_steps: 30
+guidance_scale: 7.5
+save_masks: false
+metric_device: cuda

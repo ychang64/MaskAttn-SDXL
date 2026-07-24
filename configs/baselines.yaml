@@ -1,0 +1,24 @@
+# Baselines use the common outputs/<baseline>/images + metadata.jsonl layout.
+# This repository does not download their large weights automatically.
+baselines:
+  sd15:
+    model_id: runwayml/stable-diffusion-v1-5
+    prepare_command: huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/sd15
+  sd21_base:
+    model_id: stabilityai/stable-diffusion-2-1-base
+    prepare_command: huggingface-cli download stabilityai/stable-diffusion-2-1-base --local-dir models/sd21-base
+  sdxl:
+    model_id: stabilityai/stable-diffusion-xl-base-1.0
+    prepare_command: huggingface-cli download stabilityai/stable-diffusion-xl-base-1.0 --local-dir models/stable-diffusion-xl-base-1.0
+  pixart_alpha:
+    model_id: PixArt-alpha/PixArt-XL-2-1024-MS
+    prepare_command: huggingface-cli download PixArt-alpha/PixArt-XL-2-1024-MS --local-dir models/pixart-alpha
+  pixart_sigma:
+    model_id: PixArt-alpha/PixArt-Sigma-XL-2-1024-MS
+    prepare_command: huggingface-cli download PixArt-alpha/PixArt-Sigma-XL-2-1024-MS --local-dir models/pixart-sigma
+  composable_diffusion:
+    adapter: external
+  structured_diffusion:
+    adapter: external
+  attend_and_excite:
+    adapter: external

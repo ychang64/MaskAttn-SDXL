@@ -1,0 +1,5 @@
+benchmark: t2i_compbench_spatial
+images_dir: outputs/eval_compositional/images
+prompts: data/t2i_compbench_spatial_prompts.jsonl
+output_dir: outputs/eval_compositional/metrics
+evaluator_command: null

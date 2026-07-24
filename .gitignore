@@ -1,0 +1,36 @@
+# Python and tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+venv/
+.venv/
+.venv-release/
+.venv-release-arm/
+.venv-release-arm311/
+.venv-release-native/
+.python-release-arm/
+*.egg-info/
+
+# Local data, model weights, checkpoints, and generated artifacts
+models/
+data/
+outputs/
+checkpoints/
+wandb/
+*.safetensors
+*.ckpt
+*.pt
+*.bin
+
+# Vendored dependencies are fetched locally, never committed with this project.
+third_party/
+tmp/
+MaskAttn-*.pdf
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this implementation, please cite the MaskAttn-SDXL paper and this software."
+title: "MaskAttn-SDXL"
+version: 0.1.0
+date-released: 2026-07-25
+license: Apache-2.0
+authors:
+  - family-names: Chang
+    given-names: Yu
+  - family-names: Chen
+    given-names: Jiahao
+  - family-names: Cheng
+    given-names: Anzhe
+  - family-names: Bogdan
+    given-names: Paul
+preferred-citation:
+  type: article
+  title: "MaskAttn-SDXL: Controllable Region-Level Text-To-Image Generation"
+  authors:
+    - family-names: Chang
+      given-names: Yu
+    - family-names: Chen
+      given-names: Jiahao
+    - family-names: Cheng
+      given-names: Anzhe
+    - family-names: Bogdan
+      given-names: Paul
+  url: "https://arxiv.org/abs/2509.15357"

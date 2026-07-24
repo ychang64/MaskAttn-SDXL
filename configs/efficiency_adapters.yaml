@@ -1,0 +1,10 @@
+# Table III external comparison configuration.
+comparisons:
+  controlnet:
+    adapter: external
+    required_inputs: [prompt, conditioning_image]
+    command: null # Official command with {images}, {prompts}, {output}; set locally.
+  gligen:
+    adapter: external
+    required_inputs: [prompt, grounding_boxes, grounding_phrases]
+    command: null # Official command with {images}, {prompts}, {output}; set locally.

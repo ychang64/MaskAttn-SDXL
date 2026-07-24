@@ -1,0 +1,6 @@
+# Install the local, pinned Diffusers checkout separately; see README.md.
+# Public/release installation: installs the pinned Diffusers release from PyPI.
+-e .[dev]
+
+# Local source audit only (the local checkout is deliberately not committed):
+# pip install -e third_party/diffusers

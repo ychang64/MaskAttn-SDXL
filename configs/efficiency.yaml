@@ -1,0 +1,18 @@
+model:
+  path: models/stable-diffusion-xl-base-1.0
+  device: auto
+  dtype: auto
+  allow_download: false
+maskattn:
+  stage: mid
+  placement: encoder_decoder
+  threshold: 0.5
+  negative_value: -10000.0
+  gate_hidden_dim: 128
+checkpoint: null
+prompt: "A red dragon on the left and a blue dragon on the right"
+warmup: 3
+repeats: 10
+num_inference_steps: 30
+guidance_scale: 7.5
+output_dir: outputs/efficiency
