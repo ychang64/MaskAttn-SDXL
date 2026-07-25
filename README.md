@@ -1,10 +1,17 @@
 # MaskAttn-SDXL
 
-Official implementation of MaskAttn-SDXL, published at IJCNN 2026.
+Official implementation for the IJCNN 2026 paper:
+
+> **MaskAttn-SDXL: Controllable Region-Level Text-to-Image Generation**  
+> Yu Chang, Jiahao Chen, Anzhe Cheng, and Paul Bogdan
+
+Paper: [arXiv:2509.15357](https://arxiv.org/abs/2509.15357)
 
 ![MaskAttn-SDXL architecture](docs/assets/maskattn-sdxl-architecture.png)
 
-MaskAttn-SDXL introduces token-conditioned spatial masks into SDXL cross-attention. The SDXL U-Net, VAE, text encoders, and sampling pipeline remain frozen; only the masking heads are trained.
+## Overview
+
+MaskAttn-SDXL introduces token-conditioned spatial masks into SDXL cross-attention. A lightweight gate predicts a spatial mask for each text token and injects its additive mask into the cross-attention logits before softmax. The SDXL U-Net, VAE, text encoders, and sampling pipeline remain frozen; only the masking heads are trained.
 
 ## Features
 
@@ -14,13 +21,68 @@ MaskAttn-SDXL introduces token-conditioned spatial masks into SDXL cross-attenti
 - COCO data preparation, training, quality evaluation, compositional benchmark adapters, efficiency benchmarking, ablations, and qualitative generation.
 - Token-wise mask and attention visualisation.
 
+## Repository structure
+
+```text
+MaskAttn-SDXL/
+├── configs/
+│   ├── train_512.yaml                 512×512 training configuration
+│   ├── train_1024.yaml                1024×1024 training configuration
+│   ├── eval_quality.yaml              COCO / Flickr30k quality evaluation
+│   ├── eval_compositional.yaml        T2I-CompBench++ / GenEval adapter configuration
+│   ├── efficiency.yaml                SDXL / MaskAttn-SDXL efficiency benchmark
+│   ├── baselines.yaml                 baseline generation settings
+│   └── generate_qualitative.yaml      fixed-prompt qualitative generation
+├── docs/
+│   ├── assets/maskattn-sdxl-architecture.png
+│   ├── BENCHMARKS.md                  official evaluator and benchmark setup
+│   └── RELEASE_CHECKLIST.md           release-readiness checklist
+├── experiments/
+│   ├── train_maskattn_sdxl.py         gate-head training
+│   ├── eval_quality.py                FID / CLIP Score / Precision / Recall
+│   ├── eval_compositional.py          T2I-CompBench++ and GenEval adapter
+│   ├── benchmark_efficiency.py        parameters, memory, and latency
+│   ├── ablate_gating_stage.py         high / mid / low / all stage ablation
+│   ├── ablate_module_placement.py     encoder / decoder / full placement ablation
+│   ├── generate_baseline.py           unified baseline image generation
+│   ├── generate_qualitative.py        qualitative comparison and mask export
+│   └── run_all.py                     configurable experiment launcher
+├── scripts/
+│   ├── prepare_coco_captions.py       COCO multi-noun caption cache builder
+│   ├── prepare_baselines.py           baseline model preparation helper
+│   ├── prepare_benchmarks.py          external benchmark preparation helper
+│   ├── smoke_sdxl.py                  minimal baseline SDXL pipeline check
+│   └── smoke_maskattn_sdxl.py         minimal MaskAttn-SDXL integration check
+├── src/maskattn_sdxl/
+│   ├── gating.py                      token-conditioned spatial gate and STE
+│   ├── processor.py                   Diffusers cross-attention processor
+│   ├── model.py                       SDXL U-Net installation and checkpoints
+│   ├── runtime.py                     checked MaskAttn-SDXL pipeline loader
+│   ├── generation.py                  shared generation utilities
+│   ├── training.py                    frozen-backbone training utilities
+│   ├── data.py                        COCO caption data utilities
+│   ├── metrics.py                     quality metric wrappers
+│   ├── benchmarks.py                  external evaluator adapters
+│   ├── visualize.py                   token mask / attention visualisation
+│   └── config.py                      YAML and CLI configuration utilities
+├── tests/                             unit and Diffusers integration tests
+├── EXPERIMENT_MATRIX.md               paper table/figure → script/config/output map
+├── REPRODUCIBILITY.md                 implementation assumptions and protocol
+├── MASKATTN_RUNTIME_AUDIT.md          runtime validation record
+├── CITATION.cff                       machine-readable citation metadata
+├── pyproject.toml                     package and dependency definitions
+└── requirements.txt                   pip requirements
+```
+
+Generated models, datasets, checkpoints, caches, and `outputs/` are ignored by Git.
+
 ## Installation
 
 Python 3.10+ and PyTorch 2.4+ are required.
 
 ```bash
-git clone <YOUR_GITHUB_REPOSITORY_URL>
-cd Maskattn_UNet
+git clone https://github.com/ychang64/MaskAttn-SDXL.git
+cd MaskAttn-SDXL
 
 python -m venv .venv
 source .venv/bin/activate
@@ -136,17 +198,6 @@ accelerate launch experiments/ablate_module_placement.py --config configs/train_
 python experiments/generate_baseline.py --config configs/baselines.yaml --baseline sdxl
 ```
 
-## Repository structure
-
-```text
-src/maskattn_sdxl/     Core implementation
-configs/               Experiment configurations
-experiments/           Training, evaluation, ablation, and generation entry points
-scripts/               Data preparation and smoke checks
-tests/                 Unit and integration tests
-docs/                  Benchmark and release notes
-```
-
 See [EXPERIMENT_MATRIX.md](EXPERIMENT_MATRIX.md) for the complete mapping from paper experiments to scripts, configs, data, metrics, and outputs. See [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for implementation details and [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for external evaluator setup.
 
 ## License
@@ -155,4 +206,16 @@ This repository is released under the [Apache-2.0 License](LICENSE). Please also
 
 ## Citation
 
-Please cite the project using [CITATION.cff](CITATION.cff).
+If you use this repository in your research, please cite:
+
+```bibtex
+@inproceedings{chang2026maskattn_sdxl,
+  title     = {MaskAttn-SDXL: Controllable Region-Level Text-to-Image Generation},
+  author    = {Chang, Yu and Chen, Jiahao and Cheng, Anzhe and Bogdan, Paul},
+  booktitle = {International Joint Conference on Neural Networks (IJCNN)},
+  year      = {2026},
+  url       = {https://arxiv.org/abs/2509.15357}
+}
+```
+
+Machine-readable metadata is available in [CITATION.cff](CITATION.cff).
