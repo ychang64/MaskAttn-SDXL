@@ -14,7 +14,7 @@ authors:
   - family-names: Bogdan
     given-names: Paul
 preferred-citation:
-  type: article
+  type: conference-paper
   title: "MaskAttn-SDXL: Controllable Region-Level Text-To-Image Generation"
   authors:
     - family-names: Chang
@@ -25,4 +25,6 @@ preferred-citation:
       given-names: Anzhe
     - family-names: Bogdan
       given-names: Paul
+  conference: "International Joint Conference on Neural Networks (IJCNN)"
+  year: 2026
   url: "https://arxiv.org/abs/2509.15357"
