@@ -1,6 +1,6 @@
 # MaskAttn-SDXL
 
-Official implementation of MaskAttn-SDXL: Controllable Region-Level Text-to-Image Generation
+Official implementation of MaskAttn-SDXL, published at IJCNN 2026.
 
 ![MaskAttn-SDXL architecture](docs/assets/maskattn-sdxl-architecture.png)
 
