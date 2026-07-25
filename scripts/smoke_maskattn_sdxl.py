@@ -25,6 +25,11 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Explicitly permit random gates for integration wiring only",
     )
+    value.add_argument(
+        "--allow-test-only-checkpoint",
+        action="store_true",
+        help="Permit a checkpoint marked test_only for loader verification; never use this for evaluation",
+    )
     value.add_argument("--skip-pipeline", action="store_true", help="Only run the final MaskAttn U-Net integration check")
     value.add_argument("--dry-run", action="store_true", help="Validate model layout and print the execution plan")
     return value
@@ -47,6 +52,7 @@ def main() -> None:
         "backward": args.backward,
         "checkpoint": args.checkpoint,
         "allow_untrained_gates": args.allow_untrained_gates,
+        "allow_test_only_checkpoint": args.allow_test_only_checkpoint,
         "pipeline": not args.skip_pipeline,
     }
     if args.dry_run:
@@ -67,10 +73,12 @@ def main() -> None:
         checkpoint=args.checkpoint,
         maskattn_config=None if args.checkpoint else asdict(MaskAttnConfig()),
         allow_untrained_gates=args.allow_untrained_gates,
+        allow_test_only_checkpoint=args.allow_test_only_checkpoint,
         device=device,
         dtype=args.dtype,
         local_files_only=True,
     )
+    runtime_method = runtime_audit["method"]
     unet = pipe.unet
     dtype = resolve_dtype(args.dtype, device)
     sample = torch.randn(1, 4, args.height // 8, args.width // 8, device=device, dtype=dtype)
@@ -90,12 +98,12 @@ def main() -> None:
         backward_ok = False
     runtime_audit = assert_maskattn_ready(
         unet,
-        checkpoint_required=args.checkpoint is not None,
+        checkpoint_required=runtime_audit["trained_checkpoint_loaded"],
         require_forward_calls=True,
     )
     result = {
         **plan,
-        "method": "maskattn_sdxl" if args.checkpoint else "UNTRAINED_INTEGRATION_ONLY",
+        "method": runtime_method,
         "final_unet_id": id(unet),
         "unet_forward_shape": list(output.shape),
         "backward": backward_ok,
@@ -113,7 +121,7 @@ def main() -> None:
             ).images[0]
         runtime_audit = assert_maskattn_ready(
             unet,
-            checkpoint_required=args.checkpoint is not None,
+            checkpoint_required=runtime_audit["trained_checkpoint_loaded"],
             require_forward_calls=True,
         )
         output_dir = Path(args.output_dir)

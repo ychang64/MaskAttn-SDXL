@@ -134,6 +134,7 @@ def load_maskattn_pipeline(
     checkpoint: str | Path | None,
     maskattn_config: dict[str, Any] | None = None,
     allow_untrained_gates: bool = False,
+    allow_test_only_checkpoint: bool = False,
     device: str = "auto",
     dtype: str = "auto",
     local_files_only: bool = True,
@@ -157,8 +158,10 @@ def load_maskattn_pipeline(
         raise RuntimeError(
             "MaskAttn-SDXL inference requires `checkpoint`. Random gates are only allowed for an explicit integration smoke."
         )
+    checkpoint_kind: str | None = None
     if checkpoint is not None:
-        if checkpoint_maskattn_kind(checkpoint) != "trained":
+        checkpoint_kind = checkpoint_maskattn_kind(checkpoint)
+        if checkpoint_kind != "trained" and not allow_test_only_checkpoint:
             raise RuntimeError("MaskAttn-SDXL inference requires a trained gate checkpoint; test-only checkpoints are rejected.")
         checkpoint_config = checkpoint_maskattn_config(checkpoint)
         if maskattn_config is not None and MaskAttnConfig.from_mapping(maskattn_config) != checkpoint_config:
@@ -188,10 +191,14 @@ def load_maskattn_pipeline(
         final_unet._maskattn_runtime["allow_untrained_gates"] = True  # type: ignore[attr-defined]
     final_unet.eval()
     reset_maskattn_forward_calls(final_unet)
-    audit = assert_maskattn_ready(final_unet, checkpoint_required=checkpoint is not None, expected_config=config)
+    audit = assert_maskattn_ready(final_unet, checkpoint_required=checkpoint_kind == "trained", expected_config=config)
     audit.update(
         {
-            "method": "maskattn_sdxl" if checkpoint is not None else "UNTRAINED_INTEGRATION_ONLY",
+            "method": "maskattn_sdxl"
+            if checkpoint_kind == "trained"
+            else "TEST_ONLY_UNTRAINED_CHECKPOINT"
+            if checkpoint_kind == "test_only"
+            else "UNTRAINED_INTEGRATION_ONLY",
             "final_unet_id": id(final_unet),
             "installation_unet_id": id(final_unet),
             "checkpoint_load_unet_id": id(final_unet) if checkpoint is not None else None,

@@ -106,6 +106,17 @@ def test_test_only_checkpoint_cannot_be_used_for_inference(monkeypatch, tmp_path
     with pytest.raises(RuntimeError, match="requires a trained gate checkpoint"):
         load_maskattn_pipeline("unused", checkpoint=checkpoint, maskattn_config=None)
 
+    pipe, _, audit = load_maskattn_pipeline(
+        "unused",
+        checkpoint=checkpoint,
+        maskattn_config=None,
+        allow_test_only_checkpoint=True,
+    )
+    assert audit["method"] == "TEST_ONLY_UNTRAINED_CHECKPOINT"
+    assert audit["trained_checkpoint_loaded"] is False
+    with pytest.raises(RuntimeError, match="requires a trained gate checkpoint"):
+        assert_maskattn_ready(pipe.unet, checkpoint_required=True)
+
 
 def test_checkpoint_tensors_are_loaded_into_the_current_processors(tmp_path) -> None:
     config = MaskAttnConfig(stage="high", placement="encoder", gate_hidden_dim=4)
