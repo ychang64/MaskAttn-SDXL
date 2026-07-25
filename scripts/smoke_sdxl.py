@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Run a bounded real local SDXL U-Net forward/backward and one low-cost pipeline image.
-
-This is an integration proof only. It does not train, benchmark, or report paper metrics.
-"""
+"""Run a bounded MaskAttn-SDXL U-Net forward/backward and one low-cost pipeline image."""
 
 from __future__ import annotations
 
 import argparse
 import gc
 import json
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -19,14 +20,15 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     value.add_argument(
         "--dtype",
-        default="float16",
+        default="auto",
         choices=["auto", "float16", "bfloat16", "float32"],
-        help="Weight dtype; FP16 is the bounded default because local SDXL weights are FP16.",
+        help="Weight dtype; auto selects FP16 on CUDA/MPS and FP32 on CPU.",
     )
     value.add_argument("--height", type=int, default=64, help="Multiple of 8; intentionally small for smoke testing")
     value.add_argument("--width", type=int, default=64, help="Multiple of 8; intentionally small for smoke testing")
     value.add_argument("--steps", type=int, default=1, help="Denoising steps for the smoke pipeline")
     value.add_argument("--backward", action="store_true", help="Also backpropagate through a gate-only MaskAttn U-Net forward")
+    value.add_argument("--checkpoint", help="Optional MaskAttn gate checkpoint matching the default smoke configuration")
     value.add_argument("--skip-pipeline", action="store_true", help="Only run the real U-Net integration check")
     value.add_argument("--dry-run", action="store_true", help="Validate model layout and print the bounded plan")
     return value
@@ -39,7 +41,15 @@ def main() -> None:
     from maskattn_sdxl.runtime import require_local_model, resolve_device, resolve_dtype
 
     model_path = require_local_model(args.model)
-    plan = {"model": str(model_path), "height": args.height, "width": args.width, "steps": args.steps, "backward": args.backward, "pipeline": not args.skip_pipeline}
+    plan = {
+        "model": str(model_path),
+        "height": args.height,
+        "width": args.width,
+        "steps": args.steps,
+        "backward": args.backward,
+        "checkpoint": args.checkpoint,
+        "pipeline": not args.skip_pipeline,
+    }
     if args.dry_run:
         print(json.dumps(plan, indent=2, sort_keys=True))
         return
@@ -47,7 +57,12 @@ def main() -> None:
     import torch
     from diffusers import UNet2DConditionModel
 
-    from maskattn_sdxl.model import MaskAttnConfig, assert_only_maskattn_trainable, install_maskattn
+    from maskattn_sdxl.model import (
+        MaskAttnConfig,
+        assert_only_maskattn_trainable,
+        install_maskattn,
+        load_maskattn_checkpoint,
+    )
     from maskattn_sdxl.runtime import load_sdxl_pipeline
 
     device = resolve_device(args.device)
@@ -59,6 +74,8 @@ def main() -> None:
         str(model_path), subfolder="unet", variant="fp16", use_safetensors=True, local_files_only=True, torch_dtype=dtype
     ).to(device)
     installation = install_maskattn(unet, MaskAttnConfig())
+    if args.checkpoint:
+        load_maskattn_checkpoint(unet, args.checkpoint)
     assert_only_maskattn_trainable(unet)
     sample = torch.randn(1, 4, args.height // 8, args.width // 8, device=device, dtype=dtype)
     encoder = torch.randn(1, 77, int(unet.config.cross_attention_dim), device=device, dtype=dtype)
@@ -83,18 +100,24 @@ def main() -> None:
 
     if not args.skip_pipeline:
         pipe = load_sdxl_pipeline(model_path, device=device, dtype=args.dtype, local_files_only=True)
+        pipeline_installation = install_maskattn(pipe.unet, MaskAttnConfig())
+        if args.checkpoint:
+            load_maskattn_checkpoint(pipe.unet, args.checkpoint)
+        assert_only_maskattn_trainable(pipe.unet)
         pipe.enable_attention_slicing()
-        image = pipe(
-            "A red square on the left and a blue circle on the right",
-            height=args.height,
-            width=args.width,
-            num_inference_steps=args.steps,
-            guidance_scale=1.0,
-            generator=torch.Generator(device=device).manual_seed(17),
-        ).images[0]
+        with torch.inference_mode():
+            image = pipe(
+                "A red square on the left and a blue circle on the right",
+                height=args.height,
+                width=args.width,
+                num_inference_steps=args.steps,
+                guidance_scale=1.0,
+                generator=torch.Generator(device=device).manual_seed(17),
+            ).images[0]
         image_path = output_dir / "sdxl_smoke.png"
         image.save(image_path)
         result["pipeline_image"] = str(image_path.resolve())
+        result["pipeline_maskattn_processors"] = pipeline_installation.selected_layers
     (output_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(result, indent=2, sort_keys=True))
 
