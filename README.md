@@ -71,8 +71,12 @@ python experiments/generate_qualitative.py --config configs/generate_qualitative
 python experiments/train_maskattn_sdxl.py --smoke-test
 python -m pytest -q
 
-# Run one real SDXL U-Net forward and a one-step pipeline smoke image
+# Generate one baseline SDXL smoke image
 python scripts/smoke_sdxl.py --model models/stable-diffusion-xl-base-1.0
+
+# Run the MaskAttn-SDXL U-Net and pipeline integration smoke
+python scripts/smoke_maskattn_sdxl.py --model models/stable-diffusion-xl-base-1.0 \
+  --checkpoint outputs/train_1024/checkpoints/gate_final.pt
 
 # Generate qualitative samples and token masks
 python experiments/generate_qualitative.py --config configs/generate_qualitative.yaml \
