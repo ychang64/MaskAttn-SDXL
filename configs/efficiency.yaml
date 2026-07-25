@@ -9,6 +9,9 @@ maskattn:
   threshold: 0.5
   negative_value: -10000.0
   gate_hidden_dim: 128
+# Set true only to require this declared wiring to match checkpoint metadata.
+maskattn_override: false
+# Required for the MaskAttn-SDXL side of this comparison. Random gates are rejected.
 checkpoint: null
 prompt: "A red dragon on the left and a blue dragon on the right"
 warmup: 3

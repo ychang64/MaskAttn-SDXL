@@ -97,6 +97,109 @@ def load_sdxl_pipeline(
     return pipe
 
 
+def checkpoint_maskattn_config(checkpoint_path: str | Path):
+    """Read the authoritative MaskAttn installation configuration from a gate checkpoint."""
+    import torch
+
+    from .model import MaskAttnConfig
+
+    path = Path(checkpoint_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"MaskAttn checkpoint not found: {path}")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if payload.get("format") != "maskattn-sdxl-gates-v1":
+        raise ValueError(f"Not a MaskAttn-SDXL gate checkpoint: {path}")
+    return MaskAttnConfig.from_mapping(payload["maskattn_config"])
+
+
+def checkpoint_maskattn_kind(checkpoint_path: str | Path) -> str:
+    """Read checkpoint provenance before allocating a pipeline for inference."""
+    import torch
+
+    path = Path(checkpoint_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"MaskAttn checkpoint not found: {path}")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if payload.get("format") != "maskattn-sdxl-gates-v1":
+        raise ValueError(f"Not a MaskAttn-SDXL gate checkpoint: {path}")
+    kind = payload.get("checkpoint_kind", "trained" if payload.get("global_step") is not None else "test_only")
+    if kind not in {"trained", "test_only"}:
+        raise ValueError(f"Unsupported MaskAttn checkpoint kind: {kind}")
+    return kind
+
+
+def load_maskattn_pipeline(
+    model_path: str | Path,
+    *,
+    checkpoint: str | Path | None,
+    maskattn_config: dict[str, Any] | None = None,
+    allow_untrained_gates: bool = False,
+    device: str = "auto",
+    dtype: str = "auto",
+    local_files_only: bool = True,
+    allow_download: bool = False,
+    disable_safety_checker: bool = False,
+):
+    """Load one final SDXL pipeline and attach verified MaskAttn processors to its U-Net.
+
+    Checkpoint metadata is the inference configuration source. A caller-supplied config is only accepted when it
+    exactly matches that metadata; this prevents loading gate weights into a differently wired U-Net.
+    """
+    from .model import (
+        MaskAttnConfig,
+        assert_maskattn_ready,
+        install_maskattn,
+        load_maskattn_checkpoint,
+        reset_maskattn_forward_calls,
+    )
+
+    if checkpoint is None and not allow_untrained_gates:
+        raise RuntimeError(
+            "MaskAttn-SDXL inference requires `checkpoint`. Random gates are only allowed for an explicit integration smoke."
+        )
+    if checkpoint is not None:
+        if checkpoint_maskattn_kind(checkpoint) != "trained":
+            raise RuntimeError("MaskAttn-SDXL inference requires a trained gate checkpoint; test-only checkpoints are rejected.")
+        checkpoint_config = checkpoint_maskattn_config(checkpoint)
+        if maskattn_config is not None and MaskAttnConfig.from_mapping(maskattn_config) != checkpoint_config:
+            raise ValueError(
+                "Configured MaskAttn stage/placement/gate architecture differs from checkpoint metadata. "
+                "Remove the override or use a matching checkpoint."
+            )
+        config = checkpoint_config
+    else:
+        if maskattn_config is None:
+            raise ValueError("Untrained MaskAttn smoke requires an explicit maskattn configuration")
+        config = MaskAttnConfig.from_mapping(maskattn_config)
+
+    pipe = load_sdxl_pipeline(
+        model_path,
+        device=device,
+        dtype=dtype,
+        local_files_only=local_files_only,
+        allow_download=allow_download,
+        disable_safety_checker=disable_safety_checker,
+    )
+    final_unet = pipe.unet
+    installation = install_maskattn(final_unet, config)
+    if checkpoint is not None:
+        load_maskattn_checkpoint(final_unet, checkpoint)
+    else:
+        final_unet._maskattn_runtime["allow_untrained_gates"] = True  # type: ignore[attr-defined]
+    final_unet.eval()
+    reset_maskattn_forward_calls(final_unet)
+    audit = assert_maskattn_ready(final_unet, checkpoint_required=checkpoint is not None, expected_config=config)
+    audit.update(
+        {
+            "method": "maskattn_sdxl" if checkpoint is not None else "UNTRAINED_INTEGRATION_ONLY",
+            "final_unet_id": id(final_unet),
+            "installation_unet_id": id(final_unet),
+            "checkpoint_load_unet_id": id(final_unet) if checkpoint is not None else None,
+        }
+    )
+    return pipe, installation, audit
+
+
 def pipeline_components_frozen(pipe) -> None:
     for module_name in ("vae", "text_encoder", "text_encoder_2"):
         module = getattr(pipe, module_name, None)

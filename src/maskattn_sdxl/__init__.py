@@ -4,7 +4,15 @@ Heavy torch imports are intentionally lazy so every experiment's ``--help`` and 
 installed GPU runtime.
 """
 
-__all__ = ["MaskAttnConfig", "MaskGateHead", "hard_gate_with_ste", "install_maskattn", "load_maskattn_checkpoint", "save_maskattn_checkpoint"]
+__all__ = [
+    "MaskAttnConfig",
+    "MaskGateHead",
+    "hard_gate_with_ste",
+    "install_maskattn",
+    "load_maskattn_checkpoint",
+    "save_maskattn_checkpoint",
+    "load_maskattn_pipeline",
+]
 
 
 def __getattr__(name: str):
@@ -21,4 +29,8 @@ def __getattr__(name: str):
             "load_maskattn_checkpoint": load_maskattn_checkpoint,
             "save_maskattn_checkpoint": save_maskattn_checkpoint,
         }[name]
+    if name == "load_maskattn_pipeline":
+        from .runtime import load_maskattn_pipeline
+
+        return load_maskattn_pipeline
     raise AttributeError(name)

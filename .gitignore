@@ -13,6 +13,7 @@ venv/
 .venv-release-native/
 .python-release-arm/
 *.egg-info/
+build/
 
 # Local data, model weights, checkpoints, and generated artifacts
 models/

@@ -64,6 +64,8 @@ python experiments/generate_qualitative.py --config configs/generate_qualitative
   --set model.allow_download=true
 ```
 
+The implementation and experiment scripts are provided, but pretrained MaskAttn gate weights are not currently included. Train gates with the training entry point below, then pass the resulting `gate_final.pt` through `--checkpoint` or `--set checkpoint=...` for MaskAttn inference, evaluation, and benchmarking.
+
 ## Quick start
 
 ```bash
@@ -74,7 +76,11 @@ python -m pytest -q
 # Generate one baseline SDXL smoke image
 python scripts/smoke_sdxl.py --model models/stable-diffusion-xl-base-1.0
 
-# Run the MaskAttn-SDXL U-Net and pipeline integration smoke
+# Explicit untrained MaskAttn wiring smoke; this is not a trained model
+python scripts/smoke_maskattn_sdxl.py --model models/stable-diffusion-xl-base-1.0 \
+  --allow-untrained-gates
+
+# Run trained MaskAttn-SDXL inference after training gate weights
 python scripts/smoke_maskattn_sdxl.py --model models/stable-diffusion-xl-base-1.0 \
   --checkpoint outputs/train_1024/checkpoints/gate_final.pt
 
@@ -83,7 +89,7 @@ python experiments/generate_qualitative.py --config configs/generate_qualitative
   --set checkpoint=outputs/train_1024/checkpoints/gate_final.pt
 ```
 
-All experiment entries support `--help`, `--config`, `--set key=value`, `--dry-run`, and `--smoke-test`.
+Experiment entries support `--help`, `--config`, `--set key=value`, `--dry-run`, and `--smoke-test`. The two standalone smoke scripts support `--help` and `--dry-run`.
 
 ## Data preparation
 
@@ -110,15 +116,17 @@ accelerate launch experiments/train_maskattn_sdxl.py --config configs/train_1024
 ## Evaluation and ablations
 
 ```bash
-# COCO / Flickr30k quality evaluation
-python experiments/eval_quality.py --config configs/eval_quality.yaml
+# COCO / Flickr30k quality evaluation with trained gate weights
+python experiments/eval_quality.py --config configs/eval_quality.yaml \
+  --set checkpoint=/path/to/gate_final.pt
 
 # T2I-CompBench++ / GenEval official evaluator adapter
 python experiments/eval_compositional.py --config configs/eval_compositional.yaml \
   --evaluator-command 'python /path/to/official_evaluator.py --images {images} --prompts {prompts} --output {output}'
 
 # Parameter count, CUDA memory, and latency
-python experiments/benchmark_efficiency.py --config configs/efficiency.yaml
+python experiments/benchmark_efficiency.py --config configs/efficiency.yaml \
+  --set checkpoint=/path/to/gate_final.pt
 
 # Stage and module-placement ablations
 accelerate launch experiments/ablate_gating_stage.py --config configs/train_512.yaml --stages high mid low all

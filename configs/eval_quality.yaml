@@ -4,6 +4,7 @@ model:
   dtype: auto
   allow_download: false
 method: maskattn
+# Required for method: maskattn. The evaluator rejects random gates.
 checkpoint: null
 maskattn:
   stage: mid
@@ -11,6 +12,8 @@ maskattn:
   threshold: 0.5
   negative_value: -10000.0
   gate_hidden_dim: 128
+# Set true only to require this declared wiring to match checkpoint metadata.
+maskattn_override: false
 prompts: data/coco_val2014_3000_prompts.jsonl
 real_images: data/coco_val2014_images
 output_dir: outputs/eval_quality_coco

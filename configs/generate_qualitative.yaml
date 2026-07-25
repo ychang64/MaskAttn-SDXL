@@ -4,6 +4,7 @@ model:
   dtype: auto
   allow_download: false
 method: maskattn
+# Required for method: maskattn. The loader rejects random gates for qualitative generation.
 checkpoint: null
 maskattn:
   stage: mid
@@ -11,6 +12,8 @@ maskattn:
   threshold: 0.5
   negative_value: -10000.0
   gate_hidden_dim: 128
+# Set true only to require this declared wiring to match checkpoint metadata.
+maskattn_override: false
 prompts: configs/prompts_qualitative.jsonl
 output_dir: outputs/qualitative
 seed: 2026

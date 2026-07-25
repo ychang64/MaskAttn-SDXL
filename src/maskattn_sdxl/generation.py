@@ -8,13 +8,11 @@ from typing import Any, Iterable
 
 from .config import prepare_run_directory, seed_everything
 from .model import (
-    MaskAttnConfig,
+    assert_maskattn_ready,
     collect_recorded_masks,
-    install_maskattn,
-    load_maskattn_checkpoint,
     set_mask_recording,
 )
-from .runtime import load_sdxl_pipeline
+from .runtime import load_maskattn_pipeline, load_sdxl_pipeline
 from .visualize import save_token_masks
 
 
@@ -42,27 +40,38 @@ def read_prompt_records(path: str | Path, *, limit: int | None = None) -> list[d
 
 
 def _load_pipeline_for_generation(config: dict[str, Any]):
-    pipe = load_sdxl_pipeline(
+    method = config.get("method", "maskattn")
+    if method == "sdxl":
+        pipe = load_sdxl_pipeline(
+            config["model"]["path"],
+            device=config["model"].get("device", "auto"),
+            dtype=config["model"].get("dtype", "auto"),
+            local_files_only=True,
+            allow_download=bool(config["model"].get("allow_download", False)),
+            disable_safety_checker=bool(config.get("disable_safety_checker", False)),
+        )
+        processor_count = sum(1 for processor in pipe.unet.attn_processors.values() if type(processor).__name__ == "MaskAttnProcessor")
+        if processor_count:
+            raise AssertionError("Baseline SDXL pipeline unexpectedly contains MaskAttn processors")
+        return pipe, None, {"method": "sdxl", "maskattn_processor_count": 0, "final_unet_id": id(pipe.unet)}
+    if method != "maskattn":
+        raise ValueError(
+            f"This generator implements SDXL and MaskAttn-SDXL only, not `{method}`. "
+            "Use the corresponding baseline adapter/config for other methods."
+        )
+    pipe, installation, audit = load_maskattn_pipeline(
         config["model"]["path"],
+        checkpoint=config.get("checkpoint"),
+        # Checkpoint metadata is the inference source of truth. Set ``maskattn_override`` only when an
+        # experiment intentionally wants to assert that its declared wiring matches the checkpoint.
+        maskattn_config=config.get("maskattn") if config.get("maskattn_override") else None,
         device=config["model"].get("device", "auto"),
         dtype=config["model"].get("dtype", "auto"),
         local_files_only=True,
         allow_download=bool(config["model"].get("allow_download", False)),
         disable_safety_checker=bool(config.get("disable_safety_checker", False)),
     )
-    method = config.get("method", "maskattn")
-    if method == "sdxl":
-        return pipe, None
-    if method != "maskattn":
-        raise ValueError(
-            f"This generator implements SDXL and MaskAttn-SDXL only, not `{method}`. "
-            "Use the corresponding baseline adapter/config for other methods."
-        )
-    installation = install_maskattn(pipe.unet, MaskAttnConfig.from_mapping(config["maskattn"]))
-    checkpoint = config.get("checkpoint")
-    if checkpoint:
-        load_maskattn_checkpoint(pipe.unet, checkpoint)
-    return pipe, installation
+    return pipe, installation, audit
 
 
 def generate_records(config: dict[str, Any], records: Iterable[dict[str, Any]], *, root: str | Path) -> Path:
@@ -73,7 +82,7 @@ def generate_records(config: dict[str, Any], records: Iterable[dict[str, Any]], 
     run_dir = prepare_run_directory(config["output_dir"], config, root)
     image_dir = run_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
-    pipe, installation = _load_pipeline_for_generation(config)
+    pipe, installation, runtime_audit = _load_pipeline_for_generation(config)
     device = str(pipe._execution_device)
     metadata_path = run_dir / "metadata.jsonl"
     with metadata_path.open("w", encoding="utf-8") as metadata:
@@ -95,6 +104,8 @@ def generate_records(config: dict[str, Any], records: Iterable[dict[str, Any]], 
             )
             filename = f"{index:05d}.png"
             result.images[0].save(image_dir / filename)
+            if installation is not None:
+                runtime_audit = assert_maskattn_ready(pipe.unet, checkpoint_required=True, require_forward_calls=True)
             mask_dir = None
             if save_masks:
                 token_labels = pipe.tokenizer.tokenize(prompt)
@@ -108,6 +119,7 @@ def generate_records(config: dict[str, Any], records: Iterable[dict[str, Any]], 
                 "seed": image_seed,
                 "method": config.get("method", "maskattn"),
                 "mask_artifact": str(mask_dir.resolve()) if mask_dir else None,
+                "runtime_audit": runtime_audit,
             }
             metadata.write(json.dumps(output, ensure_ascii=False) + "\n")
     return run_dir

@@ -5,11 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -30,13 +26,12 @@ def main() -> None:
     if args.height <= 0 or args.width <= 0 or args.height % 8 or args.width % 8:
         raise ValueError("--height and --width must be positive multiples of 8")
 
-    from maskattn_sdxl.runtime import load_sdxl_pipeline, require_local_model, resolve_device
+    from maskattn_sdxl.runtime import require_local_model
 
     model_path = require_local_model(args.model)
-    device = resolve_device(args.device)
     plan = {
         "model": str(model_path),
-        "device": device,
+        "device": args.device,
         "dtype": args.dtype,
         "height": args.height,
         "width": args.width,
@@ -48,6 +43,9 @@ def main() -> None:
 
     import torch
 
+    from maskattn_sdxl.runtime import load_sdxl_pipeline, resolve_device
+
+    device = resolve_device(args.device)
     pipe = load_sdxl_pipeline(model_path, device=device, dtype=args.dtype, local_files_only=True)
     pipe.enable_attention_slicing()
     with torch.inference_mode():

@@ -37,3 +37,4 @@ def test_all_open_gate_matches_real_diffusers_attention() -> None:
     actual = masked(hidden_states, encoder_hidden_states=encoder_hidden_states)
 
     torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+    assert masked.processor.forward_calls == 1

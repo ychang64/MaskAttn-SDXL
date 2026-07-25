@@ -10,6 +10,7 @@ from .config import prepare_run_directory, seed_everything
 from .data import ImageCaptionDataset, collate_captions, read_jsonl
 from .model import (
     MaskAttnConfig,
+    assert_maskattn_device_consistency,
     assert_only_maskattn_trainable,
     install_maskattn,
     load_maskattn_checkpoint,
@@ -136,6 +137,7 @@ def run_training(config: dict[str, Any], *, root: str | Path) -> Path:
     pipeline_components_frozen(pipe)
     installation = install_maskattn(pipe.unet, MaskAttnConfig.from_mapping(config["maskattn"]))
     assert_only_maskattn_trainable(pipe.unet)
+    assert_maskattn_device_consistency(pipe.unet)
     scheduler_source, is_local = resolve_model_source(model_cfg["path"], allow_download=allow_download)
     noise_scheduler = DDPMScheduler.from_pretrained(
         scheduler_source,
@@ -155,6 +157,7 @@ def run_training(config: dict[str, Any], *, root: str | Path) -> Path:
         num_training_steps=int(train_cfg["max_train_steps"]) * accelerator.num_processes,
     )
     unet, optimizer, dataloader, lr_scheduler = accelerator.prepare(pipe.unet, optimizer, dataloader, lr_scheduler)
+    assert_maskattn_device_consistency(accelerator.unwrap_model(unet))
 
     global_step = 0
     resume_path = train_cfg.get("resume_from")

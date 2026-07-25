@@ -41,3 +41,6 @@ def test_processor_forward_backward_and_mask_capture() -> None:
     output.square().mean().backward()
     assert processor.gate_head.feature_net[1].weight.grad is not None
     assert processor.last_gate is not None
+    assert processor.forward_calls == 1
+    processor.reset_forward_calls()
+    assert processor.forward_calls == 0

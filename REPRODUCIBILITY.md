@@ -23,6 +23,8 @@
 - Every run records its resolved configuration, environment metadata, seed, and output location.
 - Checkpoints contain gate weights, optimizer state, global step, selected layers, and MaskAttn configuration.
 - Qualitative generation stores token-wise gate probabilities, hard masks, and post-mask attention maps.
+- MaskAttn inference reconstructs its processor configuration from checkpoint metadata, records checkpoint SHA-256, and verifies processor invocation on the final pipeline U-Net.
+- Random gates are restricted to the explicit `--allow-untrained-gates` integration smoke; inference, evaluation, and efficiency benchmarking require a trained gate checkpoint.
 
 ## Reference environment
 
@@ -42,3 +44,4 @@
 - Gate checkpoint save/load.
 - Real Diffusers attention-processor parity with an all-open gate.
 - Local SDXL U-Net and pipeline smoke checks.
+- Final-U-Net attachment, checkpoint metadata compatibility, gate device/dtype consistency, processor call counting, and checkpoint-required inference checks.

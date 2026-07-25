@@ -69,6 +69,7 @@ def test_gate_checkpoint_round_trip(tmp_path) -> None:
     install_maskattn(restored, MaskAttnConfig(stage="high", placement="encoder", gate_hidden_dim=4))
     payload = load_maskattn_checkpoint(restored, checkpoint)
     assert payload["global_step"] == 7
+    assert payload["checkpoint_kind"] == "trained"
     source_values = [value.detach().clone() for _, processor in iter_maskattn_processors(unet) for value in processor.gate_head.parameters()]
     target_values = [value.detach().clone() for _, processor in iter_maskattn_processors(restored) for value in processor.gate_head.parameters()]
     assert len(source_values) == len(target_values)

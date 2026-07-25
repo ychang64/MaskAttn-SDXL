@@ -35,3 +35,7 @@ All baselines use `experiments/generate_baseline.py` where a compatible local pi
 ## Stage mapping
 
 This repository maps `down_blocks.1`/`up_blocks.1` to high, `down_blocks.2`/`up_blocks.0` to mid, and `mid_block` to low. The selected paths are persisted in the gate checkpoint sidecar and resolved configuration.
+
+## Runtime requirements
+
+MaskAttn qualitative generation, quality evaluation, and efficiency benchmarking require a trained gate checkpoint supplied through `checkpoint`. See [MASKATTN_RUNTIME_AUDIT.md](MASKATTN_RUNTIME_AUDIT.md) for final-U-Net attachment, device/dtype, checkpoint, and processor-invocation checks.

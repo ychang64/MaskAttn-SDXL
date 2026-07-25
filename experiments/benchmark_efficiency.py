@@ -28,15 +28,17 @@ def main() -> None:
     config = resolve_config(args, DEFAULTS)
     if execute_mode(args, config):
         return
+    if not config.get("checkpoint"):
+        raise ValueError("MaskAttn efficiency benchmarking requires a trained `checkpoint`; random gates are not benchmarked.")
     from maskattn_sdxl.benchmarks import benchmark_pipeline, write_json
     from maskattn_sdxl.generation import _load_pipeline_for_generation
 
     base_config = dict(config)
     base_config["method"] = "sdxl"
-    base_pipe, _ = _load_pipeline_for_generation(base_config)
+    base_pipe, _, _ = _load_pipeline_for_generation(base_config)
     mask_config = dict(config)
     mask_config["method"] = "maskattn"
-    mask_pipe, _ = _load_pipeline_for_generation(mask_config)
+    mask_pipe, _, _ = _load_pipeline_for_generation(mask_config)
     common = {"prompt": config["prompt"], "warmup": int(config["warmup"]), "repeats": int(config["repeats"]), "steps": int(config["num_inference_steps"]), "guidance_scale": float(config["guidance_scale"])}
     results = {"sdxl": benchmark_pipeline(base_pipe, **common), "maskattn_sdxl": benchmark_pipeline(mask_pipe, **common)}
     output = write_json(results, config["output_dir"] + "/efficiency.json")

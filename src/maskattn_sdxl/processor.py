@@ -59,6 +59,14 @@ class MaskAttnProcessor(nn.Module):
         self.record_masks = False
         self.record_attention = True
         self.last_gate: Optional[dict[str, Tensor]] = None
+        self.register_buffer("_forward_calls", torch.zeros((), dtype=torch.long), persistent=False)
+
+    @property
+    def forward_calls(self) -> int:
+        return int(self._forward_calls.item())
+
+    def reset_forward_calls(self) -> None:
+        self._forward_calls.zero_()
 
     def set_record_masks(self, enabled: bool, *, include_attention: bool = True) -> None:
         self.record_masks = bool(enabled)
@@ -86,6 +94,7 @@ class MaskAttnProcessor(nn.Module):
     ) -> Tensor:
         if encoder_hidden_states is None:
             raise ValueError("MaskAttnProcessor can only be installed on cross-attention (`attn2`) modules.")
+        self._forward_calls.add_(1)
 
         residual = hidden_states
         if attn.spatial_norm is not None:

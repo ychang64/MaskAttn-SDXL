@@ -36,6 +36,8 @@ def main() -> None:
     config = resolve_config(args, DEFAULTS)
     if execute_mode(args, config):
         return
+    if config.get("method", "maskattn") == "maskattn" and not config.get("checkpoint"):
+        raise ValueError("MaskAttn quality evaluation requires a trained `checkpoint`; random gates are not valid evaluation.")
     from maskattn_sdxl.benchmarks import write_json, write_metrics_csv
     from maskattn_sdxl.generation import generate_records, read_prompt_records
     from maskattn_sdxl.metrics import compute_clip_score, compute_fid_and_precision_recall
