@@ -41,6 +41,22 @@ def test_processor_forward_backward_and_mask_capture() -> None:
     output.square().mean().backward()
     assert processor.gate_head.feature_net[1].weight.grad is not None
     assert processor.last_gate is not None
+    assert processor.last_gate["attention"].shape == (2, 5, 3)
     assert processor.forward_calls == 1
     processor.reset_forward_calls()
     assert processor.forward_calls == 0
+
+
+def test_gate_stays_fp32_inside_autocast() -> None:
+    processor = MaskAttnProcessor(MaskGateHead(4, 6, 3))
+    seen = []
+    processor.gate_head.register_forward_hook(lambda _module, _inputs, output: seen.append(output.dtype))
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        processor(TinyAttention(), torch.randn(1, 5, 4), encoder_hidden_states=torch.randn(1, 3, 6))
+    assert seen == [torch.float32]
+
+
+def test_open_fraction_reports_the_latest_forward() -> None:
+    processor = MaskAttnProcessor(MaskGateHead(4, 6, 3))
+    processor(TinyAttention(), torch.randn(1, 5, 4), encoder_hidden_states=torch.randn(1, 3, 6))
+    assert float(processor.last_open_fraction) == 1.0

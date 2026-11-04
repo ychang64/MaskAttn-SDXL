@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 from pathlib import Path
 from typing import Any
@@ -14,42 +15,11 @@ from .model import (
     assert_only_maskattn_trainable,
     install_maskattn,
     load_maskattn_checkpoint,
+    maskattn_open_fraction,
     maskattn_parameters,
     save_maskattn_checkpoint,
 )
 from .runtime import load_sdxl_pipeline, pipeline_components_frozen, resolve_model_source
-
-
-def default_training_config() -> dict[str, Any]:
-    return {
-        "model": {
-            "path": "models/stable-diffusion-xl-base-1.0",
-            "device": "auto",
-            "dtype": "auto",
-            "allow_download": False,
-        },
-        "data": {"caption_cache": "data/coco_train2014_multi_noun.jsonl", "num_workers": 4},
-        "maskattn": {"stage": "mid", "placement": "encoder_decoder", "threshold": 0.5, "negative_value": -10000.0, "gate_hidden_dim": 128},
-        "train": {
-            "resolution": 512,
-            "max_train_steps": 100000,
-            "train_batch_size": 2,
-            "gradient_accumulation_steps": 8,
-            "learning_rate": 0.0001,
-            "weight_decay": 0.01,
-            "betas": [0.9, 0.999],
-            "lr_warmup_steps": 1000,
-            "mixed_precision": "fp16",
-            "max_grad_norm": 1.0,
-            "seed": 42,
-            "checkpointing_steps": 1000,
-            "log_every": 20,
-            "validation_every": 1000,
-            "validation_prompts": ["A red dragon on the left and a blue dragon on the right, cinematic shot"],
-            "resume_from": None,
-        },
-        "output_dir": "outputs/train_maskattn_sdxl",
-    }
 
 
 def _encode_prompts(pipe, captions: list[str], device):
@@ -75,7 +45,7 @@ def _log_jsonl(path: Path, payload: dict) -> None:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
-def _generate_validation_samples(pipe, unet, run_dir: Path, step: int, prompts: list[str], seed: int) -> None:
+def _generate_validation_samples(pipe, unet, run_dir: Path, step: int, prompts: list[str], seed: int, resolution: int) -> None:
     """Generate periodic fixed-seed samples from the current unwrapped trainable gate heads."""
     import torch
 
@@ -88,13 +58,33 @@ def _generate_validation_samples(pipe, unet, run_dir: Path, step: int, prompts: 
     with torch.no_grad():
         for index, prompt in enumerate(prompts):
             generator = torch.Generator(device=pipe._execution_device).manual_seed(seed + index)
-            image = pipe(prompt, num_inference_steps=30, guidance_scale=7.5, generator=generator).images[0]
+            image = pipe(
+                prompt, height=resolution, width=resolution, num_inference_steps=30, guidance_scale=7.5, generator=generator
+            ).images[0]
             image.save(samples_dir / f"{index:02d}.png")
     unet.train(was_training)
 
 
 def run_training(config: dict[str, Any], *, root: str | Path) -> Path:
-    """Run the paper's standard noise-prediction objective while training gates only."""
+    """Train the gates on the standard noise-prediction objective with every SDXL component frozen.
+
+    `train.init_from` starts a new phase from existing gate weights, as the 1024px phase does after the 512px
+    phase: the step counter, optimizer, and learning-rate schedule all start over. `train.resume_from` continues
+    an interrupted run of the same phase and restores all three.
+    """
+    final_path = _train_gates(config, root)
+    # Ablation scripts train several variants in one process, so release this run's GPU memory.
+    gc.collect()
+    try:
+        import torch
+    except ImportError:
+        return final_path
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return final_path
+
+
+def _train_gates(config: dict[str, Any], root: str | Path) -> Path:
     try:
         import torch
         from accelerate import Accelerator
@@ -108,14 +98,21 @@ def run_training(config: dict[str, Any], *, root: str | Path) -> Path:
         ) from exc
 
     train_cfg = config["train"]
-    seed_everything(int(train_cfg["seed"]))
+    max_train_steps = int(train_cfg["max_train_steps"])
+    resolution = int(train_cfg["resolution"])
+    init_path = train_cfg.get("init_from")
+    resume_path = train_cfg.get("resume_from")
+    if init_path and resume_path:
+        raise ValueError("Set either train.init_from (new phase) or train.resume_from (same phase), not both.")
+
     accelerator = Accelerator(
         gradient_accumulation_steps=int(train_cfg["gradient_accumulation_steps"]),
         mixed_precision=None if train_cfg.get("mixed_precision", "no") == "no" else train_cfg["mixed_precision"],
     )
+    seed_everything(int(train_cfg["seed"]) + accelerator.process_index)
     run_dir = prepare_run_directory(config["output_dir"], config, root)
     records = read_jsonl(config["data"]["caption_cache"])
-    dataset = ImageCaptionDataset(records, int(train_cfg["resolution"]))
+    dataset = ImageCaptionDataset(records, resolution)
     dataloader = DataLoader(
         dataset,
         batch_size=int(train_cfg["train_batch_size"]),
@@ -135,9 +132,15 @@ def run_training(config: dict[str, Any], *, root: str | Path) -> Path:
         allow_download=allow_download,
     )
     pipeline_components_frozen(pipe)
+    # SDXL's stock VAE is numerically unstable in fp16; Diffusers' own SDXL trainer keeps it in fp32 for this reason.
+    pipe.vae.to(dtype=torch.float32)
     installation = install_maskattn(pipe.unet, MaskAttnConfig.from_mapping(config["maskattn"]))
     assert_only_maskattn_trainable(pipe.unet)
     assert_maskattn_device_consistency(pipe.unet)
+    if train_cfg.get("gradient_checkpointing", False):
+        # Diffusers only checkpoints in train mode. SDXL's dropout is zero, so this changes memory use only.
+        pipe.unet.enable_gradient_checkpointing()
+        pipe.unet.train()
     scheduler_source, is_local = resolve_model_source(model_cfg["path"], allow_download=allow_download)
     noise_scheduler = DDPMScheduler.from_pretrained(
         scheduler_source,
@@ -154,25 +157,43 @@ def run_training(config: dict[str, Any], *, root: str | Path) -> Path:
         "cosine",
         optimizer=optimizer,
         num_warmup_steps=int(train_cfg["lr_warmup_steps"]) * accelerator.num_processes,
-        num_training_steps=int(train_cfg["max_train_steps"]) * accelerator.num_processes,
+        num_training_steps=max_train_steps * accelerator.num_processes,
     )
     unet, optimizer, dataloader, lr_scheduler = accelerator.prepare(pipe.unet, optimizer, dataloader, lr_scheduler)
-    assert_maskattn_device_consistency(accelerator.unwrap_model(unet))
+    gate_unet = accelerator.unwrap_model(unet)
+    assert_maskattn_device_consistency(gate_unet)
+    gate_parameters = maskattn_parameters(gate_unet)
 
     global_step = 0
-    resume_path = train_cfg.get("resume_from")
+    if init_path:
+        load_maskattn_checkpoint(gate_unet, init_path)
     if resume_path:
-        checkpoint = load_maskattn_checkpoint(accelerator.unwrap_model(unet), resume_path)
+        checkpoint = load_maskattn_checkpoint(gate_unet, resume_path)
         if checkpoint.get("optimizer") is not None:
             optimizer.load_state_dict(checkpoint["optimizer"])
+        if checkpoint.get("lr_scheduler") is not None:
+            lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
         global_step = int(checkpoint.get("global_step") or 0)
+        if global_step >= max_train_steps:
+            raise ValueError(
+                f"{resume_path} is already at step {global_step} of {max_train_steps}, so nothing would be trained. "
+                "Use train.init_from to start a new phase from these gates."
+            )
 
-    progress = tqdm(
-        total=int(train_cfg["max_train_steps"]), initial=global_step, disable=not accelerator.is_local_main_process, desc="MaskAttn"
-    )
+    def save(path: Path) -> None:
+        save_maskattn_checkpoint(
+            gate_unet,
+            path,
+            installation=installation,
+            optimizer_state=optimizer.state_dict(),
+            scheduler_state=lr_scheduler.state_dict(),
+            global_step=global_step,
+        )
+
+    progress = tqdm(total=max_train_steps, initial=global_step, disable=not accelerator.is_local_main_process, desc="MaskAttn")
     log_path = run_dir / "train_metrics.jsonl"
     data_iter = iter(dataloader)
-    while global_step < int(train_cfg["max_train_steps"]):
+    while global_step < max_train_steps:
         try:
             batch = next(data_iter)
         except StopIteration:
@@ -183,12 +204,13 @@ def run_training(config: dict[str, Any], *, root: str | Path) -> Path:
             with torch.no_grad():
                 latents = pipe.vae.encode(pixels).latent_dist.sample() * pipe.vae.config.scaling_factor
                 prompt_embeds, pooled_embeds = _encode_prompts(pipe, batch["captions"], accelerator.device)
+            latents = latents.to(dtype=prompt_embeds.dtype)
             noise = torch.randn_like(latents)
             timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (latents.shape[0],), device=latents.device)
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
             added_cond_kwargs = {
                 "text_embeds": pooled_embeds,
-                "time_ids": _time_ids(pipe, latents.shape[0], int(train_cfg["resolution"]), prompt_embeds.dtype, latents.device),
+                "time_ids": _time_ids(pipe, latents.shape[0], resolution, prompt_embeds.dtype, latents.device),
             }
             with accelerator.autocast():
                 model_pred = unet(
@@ -201,9 +223,11 @@ def run_training(config: dict[str, Any], *, root: str | Path) -> Path:
                 else:
                     raise ValueError(f"Unsupported prediction type: {noise_scheduler.config.prediction_type}")
                 loss = torch.nn.functional.mse_loss(model_pred.float(), target.float(), reduction="mean")
+            if not torch.isfinite(loss):
+                raise FloatingPointError(f"Non-finite loss {loss.item()} after {global_step} optimizer steps")
             accelerator.backward(loss)
             if accelerator.sync_gradients:
-                accelerator.clip_grad_norm_(maskattn_parameters(accelerator.unwrap_model(unet)), float(train_cfg["max_grad_norm"]))
+                accelerator.clip_grad_norm_(gate_parameters, float(train_cfg["max_grad_norm"]))
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad(set_to_none=True)
@@ -214,34 +238,33 @@ def run_training(config: dict[str, Any], *, root: str | Path) -> Path:
             if accelerator.is_main_process and global_step % int(train_cfg["log_every"]) == 0:
                 _log_jsonl(
                     log_path,
-                    {"step": global_step, "loss": float(loss.detach().cpu()), "lr": float(lr_scheduler.get_last_lr()[0])},
+                    {
+                        "step": global_step,
+                        "loss": float(loss.detach().cpu()),
+                        "lr": float(lr_scheduler.get_last_lr()[0]),
+                        "gate_open_fraction": maskattn_open_fraction(gate_unet),
+                    },
                 )
             if accelerator.is_main_process and global_step % int(train_cfg["checkpointing_steps"]) == 0:
-                save_maskattn_checkpoint(
-                    accelerator.unwrap_model(unet),
-                    run_dir / "checkpoints" / f"gate_step_{global_step:07d}.pt",
-                    installation=installation,
-                    optimizer_state=optimizer.state_dict(),
-                    global_step=global_step,
-                )
+                save(run_dir / "checkpoints" / f"gate_step_{global_step:07d}.pt")
             validation_every = int(train_cfg.get("validation_every", 0))
             if validation_every and global_step % validation_every == 0:
                 accelerator.wait_for_everyone()
                 if accelerator.is_main_process:
                     _generate_validation_samples(
                         pipe,
-                        accelerator.unwrap_model(unet),
+                        gate_unet,
                         run_dir,
                         global_step,
                         list(train_cfg.get("validation_prompts", [])),
                         int(train_cfg["seed"]),
+                        resolution,
                     )
                 accelerator.wait_for_everyone()
     progress.close()
     accelerator.wait_for_everyone()
     final_path = run_dir / "checkpoints" / "gate_final.pt"
     if accelerator.is_main_process:
-        save_maskattn_checkpoint(
-            accelerator.unwrap_model(unet), final_path, installation=installation, optimizer_state=optimizer.state_dict(), global_step=global_step
-        )
+        save(final_path)
+    accelerator.free_memory()
     return final_path

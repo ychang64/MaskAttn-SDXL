@@ -83,7 +83,8 @@ def main() -> None:
     dtype = resolve_dtype(args.dtype, device)
     sample = torch.randn(1, 4, args.height // 8, args.width // 8, device=device, dtype=dtype)
     encoder = torch.randn(1, 77, int(unet.config.cross_attention_dim), device=device, dtype=dtype)
-    text_embeds = torch.randn(1, 1280, device=device, dtype=dtype)
+    pooled_dim = int(unet.config.projection_class_embeddings_input_dim) - 6 * int(unet.config.addition_time_embed_dim)
+    text_embeds = torch.randn(1, pooled_dim, device=device, dtype=dtype)
     time_ids = torch.tensor([[args.height, args.width, 0, 0, args.height, args.width]], device=device, dtype=dtype)
     kwargs = {"encoder_hidden_states": encoder, "added_cond_kwargs": {"text_embeds": text_embeds, "time_ids": time_ids}}
     if args.backward:

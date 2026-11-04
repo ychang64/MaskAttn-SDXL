@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 
-from _common import add_common_arguments, execute_mode, resolve_config
+from _common import MASKATTN_DEFAULTS, add_common_arguments, execute_mode, resolve_config
 
 DEFAULTS = {
     "model": {"path": "models/stable-diffusion-xl-base-1.0", "device": "auto", "dtype": "auto"},
-    "maskattn": {"stage": "mid", "placement": "encoder_decoder", "threshold": 0.5, "negative_value": -10000.0, "gate_hidden_dim": 128},
+    "maskattn": dict(MASKATTN_DEFAULTS),
     "checkpoint": None,
     "prompt": "A red dragon on the left and a blue dragon on the right",
     "warmup": 3,
@@ -30,17 +31,21 @@ def main() -> None:
         return
     if not config.get("checkpoint"):
         raise ValueError("MaskAttn efficiency benchmarking requires a trained `checkpoint`; random gates are not benchmarked.")
+    import torch
+
     from maskattn_sdxl.benchmarks import benchmark_pipeline, write_json
     from maskattn_sdxl.generation import _load_pipeline_for_generation
 
-    base_config = dict(config)
-    base_config["method"] = "sdxl"
-    base_pipe, _, _ = _load_pipeline_for_generation(base_config)
-    mask_config = dict(config)
-    mask_config["method"] = "maskattn"
-    mask_pipe, _, _ = _load_pipeline_for_generation(mask_config)
     common = {"prompt": config["prompt"], "warmup": int(config["warmup"]), "repeats": int(config["repeats"]), "steps": int(config["num_inference_steps"]), "guidance_scale": float(config["guidance_scale"])}
-    results = {"sdxl": benchmark_pipeline(base_pipe, **common), "maskattn_sdxl": benchmark_pipeline(mask_pipe, **common)}
+    results = {}
+    # One pipeline at a time: a second pipeline on the GPU would be counted in the first one's peak memory.
+    for label, method in (("sdxl", "sdxl"), ("maskattn_sdxl", "maskattn")):
+        pipe, _, _ = _load_pipeline_for_generation({**config, "method": method})
+        results[label] = benchmark_pipeline(pipe, **common)
+        del pipe
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     output = write_json(results, config["output_dir"] + "/efficiency.json")
     print(json.dumps(results, indent=2, sort_keys=True))
     print(output)

@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+UNET_WEIGHT_FILES = ("diffusion_pytorch_model.fp16.safetensors", "diffusion_pytorch_model.safetensors")
+
 
 def resolve_device(requested: str = "auto") -> str:
     import torch
@@ -29,10 +31,17 @@ def resolve_dtype(name: str, device: str):
     return choices[name]
 
 
+def weights_variant(model_path: str | Path) -> str | None:
+    """Prefer fp16 weights when a local model has them, since a partial download may hold nothing else."""
+    return "fp16" if any(Path(model_path).glob("*/*.fp16.safetensors")) else None
+
+
 def require_local_model(model_path: str | Path) -> Path:
     path = Path(model_path)
-    required = ["model_index.json", "unet/config.json", "unet/diffusion_pytorch_model.fp16.safetensors"]
+    required = ["model_index.json", "unet/config.json"]
     missing = [str(path / item) for item in required if not (path / item).is_file()]
+    if not any((path / "unet" / name).is_file() for name in UNET_WEIGHT_FILES):
+        missing.append(str(path / "unet" / UNET_WEIGHT_FILES[0]))
     if missing:
         raise FileNotFoundError(
             "SDXL model is incomplete. Expected a Diffusers-format local model directory. Missing: " + ", ".join(missing)
@@ -71,7 +80,6 @@ def load_sdxl_pipeline(
     dtype: str = "auto",
     local_files_only: bool = True,
     allow_download: bool = False,
-    disable_safety_checker: bool = False,
 ):
     """Load a local SDXL model, or an explicitly authorised Hugging Face model ID."""
     try:
@@ -86,46 +94,14 @@ def load_sdxl_pipeline(
     torch_dtype = resolve_dtype(dtype, resolved_device)
     kwargs: dict[str, Any] = {
         "torch_dtype": torch_dtype,
-        "variant": "fp16",
+        "variant": weights_variant(source) if is_local else "fp16",
         "use_safetensors": True,
         "local_files_only": local_files_only if is_local else False,
     }
-    if disable_safety_checker:
-        kwargs["safety_checker"] = None
     pipe = StableDiffusionXLPipeline.from_pretrained(source, **kwargs)
-    pipe.to(resolved_device)
+    # Transformers can keep a text encoder in its file's precision despite torch_dtype, so cast explicitly.
+    pipe.to(resolved_device, torch_dtype)
     return pipe
-
-
-def checkpoint_maskattn_config(checkpoint_path: str | Path):
-    """Read the authoritative MaskAttn installation configuration from a gate checkpoint."""
-    import torch
-
-    from .model import MaskAttnConfig
-
-    path = Path(checkpoint_path)
-    if not path.is_file():
-        raise FileNotFoundError(f"MaskAttn checkpoint not found: {path}")
-    payload = torch.load(path, map_location="cpu", weights_only=False)
-    if payload.get("format") != "maskattn-sdxl-gates-v1":
-        raise ValueError(f"Not a MaskAttn-SDXL gate checkpoint: {path}")
-    return MaskAttnConfig.from_mapping(payload["maskattn_config"])
-
-
-def checkpoint_maskattn_kind(checkpoint_path: str | Path) -> str:
-    """Read checkpoint provenance before allocating a pipeline for inference."""
-    import torch
-
-    path = Path(checkpoint_path)
-    if not path.is_file():
-        raise FileNotFoundError(f"MaskAttn checkpoint not found: {path}")
-    payload = torch.load(path, map_location="cpu", weights_only=False)
-    if payload.get("format") != "maskattn-sdxl-gates-v1":
-        raise ValueError(f"Not a MaskAttn-SDXL gate checkpoint: {path}")
-    kind = payload.get("checkpoint_kind", "trained" if payload.get("global_step") is not None else "test_only")
-    if kind not in {"trained", "test_only"}:
-        raise ValueError(f"Unsupported MaskAttn checkpoint kind: {kind}")
-    return kind
 
 
 def load_maskattn_pipeline(
@@ -139,7 +115,6 @@ def load_maskattn_pipeline(
     dtype: str = "auto",
     local_files_only: bool = True,
     allow_download: bool = False,
-    disable_safety_checker: bool = False,
 ):
     """Load one final SDXL pipeline and attach verified MaskAttn processors to its U-Net.
 
@@ -151,6 +126,7 @@ def load_maskattn_pipeline(
         assert_maskattn_ready,
         install_maskattn,
         load_maskattn_checkpoint,
+        read_maskattn_checkpoint,
         reset_maskattn_forward_calls,
     )
 
@@ -160,10 +136,11 @@ def load_maskattn_pipeline(
         )
     checkpoint_kind: str | None = None
     if checkpoint is not None:
-        checkpoint_kind = checkpoint_maskattn_kind(checkpoint)
+        payload = read_maskattn_checkpoint(checkpoint)
+        checkpoint_kind = payload["checkpoint_kind"]
         if checkpoint_kind != "trained" and not allow_test_only_checkpoint:
             raise RuntimeError("MaskAttn-SDXL inference requires a trained gate checkpoint; test-only checkpoints are rejected.")
-        checkpoint_config = checkpoint_maskattn_config(checkpoint)
+        checkpoint_config = MaskAttnConfig.from_mapping(payload["maskattn_config"])
         if maskattn_config is not None and MaskAttnConfig.from_mapping(maskattn_config) != checkpoint_config:
             raise ValueError(
                 "Configured MaskAttn stage/placement/gate architecture differs from checkpoint metadata. "
@@ -181,7 +158,6 @@ def load_maskattn_pipeline(
         dtype=dtype,
         local_files_only=local_files_only,
         allow_download=allow_download,
-        disable_safety_checker=disable_safety_checker,
     )
     final_unet = pipe.unet
     installation = install_maskattn(final_unet, config)

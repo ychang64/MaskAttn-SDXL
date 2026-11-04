@@ -8,7 +8,9 @@ maskattn:
   placement: encoder_decoder
   threshold: 0.5
   negative_value: -10000.0
-  gate_hidden_dim: 128
+  gate_hidden_dim: 192
+  gate_sharing: block
+  gate_init_logit: 2.0
 # Set true only to require this declared wiring to match checkpoint metadata.
 maskattn_override: false
 # Required for the MaskAttn-SDXL side of this comparison. Random gates are rejected.

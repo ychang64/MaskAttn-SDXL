@@ -24,7 +24,12 @@ def save_token_masks(
     sample_name: str,
     token_labels: Sequence[str] | None = None,
 ) -> Path:
-    """Persist exact flattened masks and readable PNGs when PIL is available."""
+    """Persist exact flattened masks, plus one PNG per labelled token.
+
+    Under classifier-free guidance the batch is [unconditional, conditional], so the PNGs use the last item:
+    the unconditional branch has no prompt tokens to show. `token_labels` must include BOS, as `prompt_token_labels`
+    does, so that each label lines up with its position on the token axis.
+    """
     import torch
 
     root = Path(output_dir) / sample_name
@@ -36,22 +41,19 @@ def save_token_masks(
         return root
 
     for layer, values in masks.items():
-        probabilities = values["probabilities"]
-        hard_gate = values["hard_gate"]
-        # Qualitative runs conventionally use batch size one; retain only the first item for PNG rendering.
-        attention = values.get("attention")
-        render_values = [("prob", probabilities), ("hard", hard_gate)]
-        if attention is not None:
-            render_values.append(("attention", attention))
+        render_values = [("prob", values["probabilities"]), ("hard", values["hard_gate"])]
+        if values.get("attention") is not None:
+            render_values.append(("attention", values["attention"]))
         for value_name, tensor in render_values:
-            array = tensor[0].numpy()  # [N, T]
+            array = tensor[-1].numpy()  # [N, T]
             height, width = _shape_from_locations(array.shape[0])
             layer_dir = root / layer.replace(".", "_") / value_name
             layer_dir.mkdir(parents=True, exist_ok=True)
-            for token_index in range(array.shape[1]):
+            token_count = min(len(token_labels), array.shape[1]) if token_labels else array.shape[1]
+            for token_index in range(token_count):
                 image = array[:, token_index].reshape(height, width)
                 image = np.clip(image * 255.0, 0, 255).astype(np.uint8)
-                label = token_labels[token_index] if token_labels and token_index < len(token_labels) else f"token_{token_index:03d}"
+                label = token_labels[token_index] if token_labels else f"token_{token_index:03d}"
                 safe_label = "".join(char if char.isalnum() else "_" for char in label)[:40]
-                Image.fromarray(image, mode="L").save(layer_dir / f"{token_index:03d}_{safe_label}.png")
+                Image.fromarray(image).save(layer_dir / f"{token_index:03d}_{safe_label}.png")
     return root

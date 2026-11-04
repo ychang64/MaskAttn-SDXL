@@ -12,6 +12,16 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+MASKATTN_DEFAULTS = {
+    "stage": "mid",
+    "placement": "encoder_decoder",
+    "threshold": 0.5,
+    "negative_value": -10000.0,
+    "gate_hidden_dim": 192,
+    "gate_sharing": "block",
+    "gate_init_logit": 2.0,
+}
+
 
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", type=Path, help="YAML configuration file")

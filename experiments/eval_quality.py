@@ -6,13 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 
-from _common import ROOT, add_common_arguments, execute_mode, resolve_config
+from _common import MASKATTN_DEFAULTS, ROOT, add_common_arguments, execute_mode, resolve_config
 
 DEFAULTS = {
     "model": {"path": "models/stable-diffusion-xl-base-1.0", "device": "auto", "dtype": "auto"},
     "method": "maskattn",
     "checkpoint": None,
-    "maskattn": {"stage": "mid", "placement": "encoder_decoder", "threshold": 0.5, "negative_value": -10000.0, "gate_hidden_dim": 128},
+    "maskattn": dict(MASKATTN_DEFAULTS),
     "prompts": "data/coco_val2014_3000_prompts.jsonl",
     "real_images": "data/coco_val2014_images",
     "output_dir": "outputs/eval_quality_coco",
@@ -24,6 +24,8 @@ DEFAULTS = {
     "guidance_scale": 7.5,
     "save_masks": False,
     "metric_device": "cuda",
+    "clip_model": "ViT-B-32",
+    "clip_pretrained": "laion2b_s34b_b79k",
 }
 
 
@@ -52,7 +54,13 @@ def main() -> None:
         print(image_dir)
         return
     results = compute_fid_and_precision_recall(image_dir, config["real_images"], device=config.get("metric_device", "cuda"))
-    results["clip_score"] = compute_clip_score(image_dir, [record["prompt"] for record in records], device=config.get("metric_device", "cuda"))
+    results["clip_score"] = compute_clip_score(
+        image_dir,
+        [record["prompt"] for record in records],
+        device=config.get("metric_device", "cuda"),
+        model_name=config["clip_model"],
+        pretrained=config["clip_pretrained"],
+    )
     output = write_json(results, config["output_dir"] + "/metrics.json")
     csv_output = write_metrics_csv(results, config["output_dir"] + "/metrics.csv")
     print(json.dumps(results, indent=2, sort_keys=True))
