@@ -11,13 +11,14 @@ maskattn:
   placement: encoder_decoder
   threshold: 0.5
   negative_value: -10000.0
-  gate_hidden_dim: 128
-  share_gate_heads_by_stage: true
+  gate_hidden_dim: 192
+  gate_sharing: block
+  gate_init_logit: 2.0
 train:
   resolution: 512
   max_train_steps: 100000
-  train_batch_size: 2
-  gradient_accumulation_steps: 8  # effective batch size 16 on one process
+  train_batch_size: 16
+  gradient_accumulation_steps: 1  # effective batch size 16 on one process
   learning_rate: 0.0001
   weight_decay: 0.01
   betas: [0.9, 0.999]
@@ -30,5 +31,7 @@ train:
   validation_every: 1000
   validation_prompts:
     - A red dragon on the left and a blue dragon on the right, cinematic shot
+  gradient_checkpointing: true
+  init_from: null
   resume_from: null
 output_dir: outputs/train_512

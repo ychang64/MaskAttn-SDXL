@@ -16,18 +16,22 @@ from .processor import MaskAttnProcessor
 
 Stage = Literal["high", "mid", "low", "all"]
 Placement = Literal["encoder", "decoder", "encoder_decoder"]
+GateSharing = Literal["stage", "block", "layer"]
+
+CHECKPOINT_FORMAT = "maskattn-sdxl-gates-v2"
 
 
 @dataclass(frozen=True)
 class MaskAttnConfig:
-    """Implementation settings; defaults intentionally match the paper where specified."""
+    """Implementation settings. docs/PAPER_AUDIT.md separates what the paper fixes from what it leaves open."""
 
     stage: Stage = "mid"
     placement: Placement = "encoder_decoder"
     threshold: float = 0.5
     negative_value: float = -1.0e4
-    gate_hidden_dim: int = 128
-    share_gate_heads_by_stage: bool = True
+    gate_hidden_dim: int = 192
+    gate_sharing: GateSharing = "block"
+    gate_init_logit: float = 2.0
 
     def __post_init__(self) -> None:
         if self.stage not in {"high", "mid", "low", "all"}:
@@ -38,11 +42,16 @@ class MaskAttnConfig:
             raise ValueError("threshold must lie in [0, 1]")
         if self.negative_value >= 0:
             raise ValueError("negative_value must be negative")
+        if self.gate_sharing not in {"stage", "block", "layer"}:
+            raise ValueError(f"Unknown gate_sharing: {self.gate_sharing}")
 
     @classmethod
     def from_mapping(cls, values: dict) -> "MaskAttnConfig":
         allowed = {field.name for field in cls.__dataclass_fields__.values()}
-        return cls(**{key: value for key, value in values.items() if key in allowed})
+        unknown = sorted(set(values) - allowed)
+        if unknown:
+            raise ValueError(f"Unknown MaskAttn config keys: {unknown}")
+        return cls(**values)
 
 
 @dataclass
@@ -72,9 +81,9 @@ def _location(name: str) -> str:
 def infer_stage(name: str) -> str:
     """Map SDXL's topology to high/mid/low ablation labels.
 
-    This is an explicit implementation assumption: the paper names resolution stages but does not publish exact
-    module paths. We map the outer cross-attention blocks to high, inner encoder/decoder blocks to mid, and the
-    U-Net bridge to low. Selected paths are always recorded with a run.
+    This is an implementation assumption: the paper names resolution stages but does not publish module paths.
+    SDXL has cross-attention at only two spatial resolutions, so "mid" and "low" differ by U-Net depth rather
+    than by size: down_blocks.2, up_blocks.0, and mid_block all run at 1/32 of the image side.
     """
     if name.startswith("mid_block."):
         return "low"
@@ -113,6 +122,19 @@ def selected_cross_attention_names(unet, config: MaskAttnConfig) -> tuple[list[s
     return selected, stages
 
 
+def _gate_site(name: str, stage: str, sharing: GateSharing) -> str:
+    """Name the unit that owns one gate head.
+
+    The paper attaches a head "at each cross-attention site" and shares it across timesteps. "block" gives each
+    spatial transformer (`...attentions.N`) its own head, shared by that transformer's layers.
+    """
+    if sharing == "layer":
+        return name
+    if sharing == "block":
+        return name.split(".transformer_blocks.")[0]
+    return stage
+
+
 def _attention_module(unet, processor_name: str):
     return unet.get_submodule(processor_name.removesuffix(".processor"))
 
@@ -143,13 +165,11 @@ def install_maskattn(unet: nn.Module, config: MaskAttnConfig) -> MaskAttnInstall
         attention = _attention_module(unet, name)
         feature_dim = int(attention.query_dim)
         token_dim = int(attention.cross_attention_dim)
-        stage_key = stages[name] if config.share_gate_heads_by_stage else name
-        key = (stage_key, feature_dim, token_dim)
+        key = (_gate_site(name, stages[name], config.gate_sharing), feature_dim, token_dim)
         gate_head = shared_heads.get(key)
         if gate_head is None:
-            # Gates intentionally remain fp32 for stable sigmoid/STE arithmetic, while their device follows
-            # the final U-Net attention module. This also covers installation after ``pipe.to(device)``.
-            gate_head = MaskGateHead(feature_dim, token_dim, config.gate_hidden_dim).to(
+            # Gates stay fp32 while their device follows the final U-Net attention module.
+            gate_head = MaskGateHead(feature_dim, token_dim, config.gate_hidden_dim, config.gate_init_logit).to(
                 device=_module_device(attention), dtype=torch.float32
             )
             shared_heads[key] = gate_head
@@ -184,6 +204,23 @@ def maskattn_parameters(unet: nn.Module) -> list[nn.Parameter]:
     # ``dict`` removes shared gate parameters that are referenced by several processors.
     unique = {id(parameter): parameter for _, processor in iter_maskattn_processors(unet) for parameter in processor.parameters()}
     return list(unique.values())
+
+
+def gate_heads(unet: nn.Module) -> dict[str, MaskGateHead]:
+    """Unique gate heads, each keyed by the first processor that uses it."""
+    heads: dict[str, MaskGateHead] = {}
+    seen: set[int] = set()
+    for name, processor in sorted(iter_maskattn_processors(unet), key=lambda item: item[0]):
+        if id(processor.gate_head) not in seen:
+            seen.add(id(processor.gate_head))
+            heads[name] = processor.gate_head
+    return heads
+
+
+def maskattn_open_fraction(unet: nn.Module) -> float | None:
+    """Mean fraction of token-location pairs left open by the latest forward pass."""
+    values = [processor.last_open_fraction for _, processor in iter_maskattn_processors(unet) if processor.last_open_fraction is not None]
+    return float(torch.stack(values).mean()) if values else None
 
 
 def assert_only_maskattn_trainable(unet: nn.Module) -> None:
@@ -255,8 +292,11 @@ def collect_recorded_masks(unet: nn.Module) -> dict[str, dict[str, torch.Tensor]
     return {name: processor.last_gate for name, processor in iter_maskattn_processors(unet) if processor.last_gate is not None}
 
 
-def gate_state_dict(unet: nn.Module) -> dict[str, torch.Tensor]:
-    return {key: value.cpu() for key, value in unet.state_dict().items() if ".processor.gate_head." in key}
+def gate_state_dict(unet: nn.Module) -> dict[str, dict[str, torch.Tensor]]:
+    return {
+        name: {key: value.detach().cpu() for key, value in head.state_dict().items()}
+        for name, head in gate_heads(unet).items()
+    }
 
 
 def save_maskattn_checkpoint(
@@ -265,30 +305,29 @@ def save_maskattn_checkpoint(
     *,
     installation: MaskAttnInstallation,
     optimizer_state: dict | None = None,
+    scheduler_state: dict | None = None,
     global_step: int | None = None,
 ) -> Path:
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_kind = "trained" if global_step else "test_only"
     torch.save(
         {
-            "format": "maskattn-sdxl-gates-v1",
-            "checkpoint_kind": "trained" if global_step is not None else "test_only",
+            "format": CHECKPOINT_FORMAT,
+            "checkpoint_kind": checkpoint_kind,
             "maskattn_config": asdict(installation.config),
             "selected_layers": installation.selected_layers,
             "stage_by_layer": installation.stage_by_layer,
             "gate_state_dict": gate_state_dict(unet),
             "optimizer": optimizer_state,
+            "lr_scheduler": scheduler_state,
             "global_step": global_step,
         },
         target,
     )
     with target.with_suffix(".json").open("w", encoding="utf-8") as handle:
         json.dump(
-            {
-                "checkpoint_kind": "trained" if global_step is not None else "test_only",
-                "maskattn": installation.as_dict(),
-                "global_step": global_step,
-            },
+            {"checkpoint_kind": checkpoint_kind, "maskattn": installation.as_dict(), "global_step": global_step},
             handle,
             indent=2,
             sort_keys=True,
@@ -296,30 +335,33 @@ def save_maskattn_checkpoint(
     return target
 
 
-def load_maskattn_checkpoint(unet: nn.Module, checkpoint_path: str | Path, *, strict: bool = True) -> dict:
+def read_maskattn_checkpoint(checkpoint_path: str | Path) -> dict:
+    path = Path(checkpoint_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"MaskAttn checkpoint not found: {path}")
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    if checkpoint.get("format") != CHECKPOINT_FORMAT:
+        raise ValueError(f"Not a MaskAttn-SDXL gate checkpoint: {path}")
+    if checkpoint.get("checkpoint_kind") not in {"trained", "test_only"}:
+        raise ValueError(f"Unsupported MaskAttn checkpoint kind: {checkpoint.get('checkpoint_kind')}")
+    return checkpoint
+
+
+def load_maskattn_checkpoint(unet: nn.Module, checkpoint_path: str | Path) -> dict:
     checkpoint_file = Path(checkpoint_path)
-    checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=False)
-    if checkpoint.get("format") != "maskattn-sdxl-gates-v1":
-        raise ValueError("Not a MaskAttn-SDXL gate checkpoint")
-    checkpoint_config = MaskAttnConfig.from_mapping(checkpoint["maskattn_config"])
-    assert_maskattn_config_matches(unet, checkpoint_config)
-    checkpoint_layers = list(checkpoint.get("selected_layers", []))
-    assert_maskattn_installed(unet, expected_layers=checkpoint_layers)
-    expected_keys = set(gate_state_dict(unet))
-    checkpoint_keys = set(checkpoint["gate_state_dict"])
-    if expected_keys != checkpoint_keys:
+    checkpoint = read_maskattn_checkpoint(checkpoint_file)
+    assert_maskattn_config_matches(unet, MaskAttnConfig.from_mapping(checkpoint["maskattn_config"]))
+    assert_maskattn_installed(unet, expected_layers=list(checkpoint.get("selected_layers", [])))
+    heads = gate_heads(unet)
+    saved = checkpoint["gate_state_dict"]
+    if heads.keys() != saved.keys():
         raise RuntimeError(
             "Gate checkpoint keys do not match the final installed U-Net. "
-            f"missing={sorted(expected_keys - checkpoint_keys)}, unexpected={sorted(checkpoint_keys - expected_keys)}"
+            f"missing={sorted(heads.keys() - saved.keys())}, unexpected={sorted(saved.keys() - heads.keys())}"
         )
-    result = unet.load_state_dict(checkpoint["gate_state_dict"], strict=False)
-    missing_gate_keys = [key for key in result.missing_keys if ".processor.gate_head." in key]
-    unexpected_gate_keys = [key for key in result.unexpected_keys if ".processor.gate_head." in key]
-    if strict and (missing_gate_keys or unexpected_gate_keys):
-        raise RuntimeError(f"Gate checkpoint mismatch. missing={missing_gate_keys}, unexpected={unexpected_gate_keys}")
-    checkpoint_kind = checkpoint.get("checkpoint_kind", "trained" if checkpoint.get("global_step") is not None else "test_only")
-    if checkpoint_kind not in {"trained", "test_only"}:
-        raise ValueError(f"Unsupported MaskAttn checkpoint kind: {checkpoint_kind}")
+    for name, head in heads.items():
+        head.load_state_dict(saved[name])
+    checkpoint_kind = checkpoint["checkpoint_kind"]
     runtime = getattr(unet, "_maskattn_runtime", {})
     runtime.update(
         {

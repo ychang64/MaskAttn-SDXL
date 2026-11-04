@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
+
+
+def _split_command(template: str) -> list[str]:
+    """Split a command line without eating the backslashes of Windows paths."""
+    parts = shlex.split(template, posix=os.name != "nt")
+    return [part[1:-1] if len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'" else part for part in parts]
 
 
 def run_external_evaluator(
@@ -29,8 +36,11 @@ def run_external_evaluator(
         )
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    command = command_template.format(images=Path(images_dir).resolve(), prompts=Path(prompts_path).resolve(), output=output.resolve())
-    result = subprocess.run(shlex.split(command), check=False)
+    replacements = {"{images}": Path(images_dir).resolve(), "{prompts}": Path(prompts_path).resolve(), "{output}": output.resolve()}
+    command = _split_command(command_template)
+    for placeholder, value in replacements.items():
+        command = [part.replace(placeholder, str(value)) for part in command]
+    result = subprocess.run(command, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"{benchmark_name} evaluator failed with exit code {result.returncode}: {command}")
     return output

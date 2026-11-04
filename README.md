@@ -13,6 +13,10 @@ Paper: [arXiv:2509.15357](https://arxiv.org/abs/2509.15357)
 
 MaskAttn-SDXL introduces token-conditioned spatial masks into SDXL cross-attention. A lightweight gate predicts a spatial mask for each text token and injects its additive mask into the cross-attention logits before softmax. The SDXL U-Net, VAE, text encoders, and sampling pipeline remain frozen; only the masking heads are trained.
 
+## Status
+
+The paper's numbers have not been re-measured with this code. [docs/PAPER_AUDIT.md](docs/PAPER_AUDIT.md) separates what the paper fixes from the settings it leaves open, and lists what remains unverified.
+
 ## Features
 
 - Token-conditioned spatial gating in SDXL cross-attention.
@@ -36,6 +40,7 @@ MaskAttn-SDXL/
 ├── docs/
 │   ├── assets/maskattn-sdxl-architecture.png
 │   ├── BENCHMARKS.md                  official evaluator and benchmark setup
+│   ├── PAPER_AUDIT.md                 paper-versus-code record and open assumptions
 │   └── RELEASE_CHECKLIST.md           release-readiness checklist
 ├── experiments/
 │   ├── train_maskattn_sdxl.py         gate-head training
@@ -49,6 +54,8 @@ MaskAttn-SDXL/
 │   └── run_all.py                     configurable experiment launcher
 ├── scripts/
 │   ├── prepare_coco_captions.py       COCO multi-noun caption cache builder
+│   ├── prepare_eval_prompts.py        COCO / Flickr30k evaluation captions and real images
+│   ├── check_sdxl_topology.py         full-size U-Net training check without downloaded weights
 │   ├── prepare_baselines.py           baseline model preparation helper
 │   ├── prepare_benchmarks.py          external benchmark preparation helper
 │   ├── smoke_sdxl.py                  minimal baseline SDXL pipeline check
@@ -78,7 +85,7 @@ Generated models, datasets, checkpoints, caches, and `outputs/` are ignored by G
 
 ## Installation
 
-Python 3.10+ and PyTorch 2.4+ are required.
+Python 3.10+ and PyTorch 2.5+ are required. Tested with Python 3.13, PyTorch 2.11 (`cu128`), Diffusers 0.35.1, Transformers 4.49, and Accelerate 1.1.
 
 ```bash
 git clone https://github.com/ychang64/MaskAttn-SDXL.git
@@ -87,8 +94,11 @@ cd MaskAttn-SDXL
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 python -m pip install -e '.[dev]'
 ```
+
+RTX 50-series GPUs need a CUDA 12.8 build or newer, which is what the `cu128` index provides. On Windows, activate with `.venv\Scripts\activate`.
 
 Install optional dependencies as needed:
 
@@ -101,7 +111,7 @@ python -m spacy download en_core_web_sm
 python -m pip install -e '.[metrics]'
 ```
 
-Core dependencies are pinned in [pyproject.toml](pyproject.toml): PyTorch, Diffusers 0.35.1, Transformers, Accelerate, Safetensors, Hugging Face Hub, Datasets, Pillow, NumPy, PyYAML, and tqdm.
+Core dependencies are declared in [pyproject.toml](pyproject.toml): PyTorch, torchvision, Diffusers 0.35.1, Transformers, Accelerate, Safetensors, Hugging Face Hub, Datasets, Pillow, NumPy, PyYAML, and tqdm.
 
 ## Model weights
 
@@ -135,6 +145,9 @@ The implementation and experiment scripts are provided, but pretrained MaskAttn 
 python experiments/train_maskattn_sdxl.py --smoke-test
 python -m pytest -q
 
+# Train on the full-size SDXL U-Net with random weights: wiring, precision, and GPU memory only
+python scripts/check_sdxl_topology.py --memory-limit-gib 10
+
 # Generate one baseline SDXL smoke image
 python scripts/smoke_sdxl.py --model models/stable-diffusion-xl-base-1.0
 
@@ -162,6 +175,19 @@ python scripts/prepare_coco_captions.py \
   --output data/coco_train2014_multi_noun.jsonl \
   --min-noun-phrases 2 \
   --limit 200000
+
+# Table I evaluation splits: prompts plus their matching real images
+python scripts/prepare_eval_prompts.py --dataset coco \
+  --captions /path/to/coco/annotations/captions_val2014.json \
+  --images-dir /path/to/coco/val2014 \
+  --output-prompts data/coco_val2014_3000_prompts.jsonl \
+  --output-images data/coco_val2014_images
+
+python scripts/prepare_eval_prompts.py --dataset flickr30k \
+  --captions /path/to/flickr30k/results_20130124.token \
+  --images-dir /path/to/flickr30k/images \
+  --output-prompts data/flickr30k_500_prompts.jsonl \
+  --output-images data/flickr30k_images
 ```
 
 ## Training
@@ -170,10 +196,21 @@ python scripts/prepare_coco_captions.py \
 # 512x512 phase: 100k steps, effective batch size 16
 accelerate launch experiments/train_maskattn_sdxl.py --config configs/train_512.yaml
 
-# 1024x1024 phase: 10k steps, batch size 8
-accelerate launch experiments/train_maskattn_sdxl.py --config configs/train_1024.yaml \
-  --set train.resume_from=outputs/train_512/checkpoints/gate_final.pt
+# 1024x1024 phase: 10k steps, effective batch size 8, starting from the 512x512 gates
+accelerate launch experiments/train_maskattn_sdxl.py --config configs/train_1024.yaml
 ```
+
+`train.init_from` starts a new phase from existing gates: the step counter, optimizer, and learning-rate schedule start over. `train.resume_from` continues an interrupted run of the same phase and restores all three. `gate_open_fraction` in `train_metrics.jsonl` shows how many token-location pairs the gates still allow; it starts at 1.0.
+
+The default configs fit a 12 GB GPU. U-Net training cost measured on an RTX 5070 with `scripts/check_sdxl_topology.py`, excluding the text encoders, VAE, and data loading:
+
+| Batch x resolution | Gradient checkpointing | Images/s | Peak GPU memory |
+|---|---|---|---|
+| 2 x 512 | off | 4.5 | 8.2 GiB |
+| 16 x 512 (default) | on | 8.7 | 7.5 GiB |
+| 4 x 1024 (default) | on | 1.8 | 7.5 GiB |
+| 1 x 1024 | off | out of memory at a 9.5 GiB limit | |
+| 8 x 1024 | on | out of memory at a 9.5 GiB limit | |
 
 ## Evaluation and ablations
 

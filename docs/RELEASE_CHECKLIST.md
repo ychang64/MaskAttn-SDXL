@@ -5,7 +5,7 @@ This repository intentionally excludes model weights, datasets, generated images
 Before tagging a public release:
 
 1. Run `python -m pytest -q` and `python -m ruff check src experiments scripts tests` in a clean environment.
-2. Run every experimental entry point with `--help` and `--dry-run`.
+2. Run every experimental entry point with `--help` and `--dry-run`, and run `python scripts/check_sdxl_topology.py --memory-limit-gib 10` on a GPU host.
 3. Run `python scripts/smoke_maskattn_sdxl.py --model <local-sdxl-dir> --checkpoint <gate_final.pt> --backward` on a supported host; retain only its text result, not the generated image.
 4. Verify `CITATION.cff`, `LICENSE`, model/data/evaluator license notices, and published repository URL/version.
 5. Publish experiment configurations, evaluator settings, and generated artifacts together with each release report.

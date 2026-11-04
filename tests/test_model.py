@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import pytest
 import torch
 from torch import nn
 
 from maskattn_sdxl.model import (
     MaskAttnConfig,
     assert_only_maskattn_trainable,
+    gate_heads,
     install_maskattn,
     iter_maskattn_processors,
     load_maskattn_checkpoint,
@@ -74,3 +76,33 @@ def test_gate_checkpoint_round_trip(tmp_path) -> None:
     target_values = [value.detach().clone() for _, processor in iter_maskattn_processors(restored) for value in processor.gate_head.parameters()]
     assert len(source_values) == len(target_values)
     assert all(torch.equal(source, target) for source, target in zip(source_values, target_values))
+
+
+def test_gate_sharing_controls_the_number_of_heads() -> None:
+    def head_count(sharing: str) -> int:
+        unet = FakeUNet()
+        install_maskattn(unet, MaskAttnConfig(stage="mid", gate_sharing=sharing, gate_hidden_dim=4))
+        return len(gate_heads(unet))
+
+    assert head_count("stage") == 1
+    assert head_count("block") == 2
+    assert head_count("layer") == 2
+
+
+def test_shared_head_is_saved_once(tmp_path) -> None:
+    unet = FakeUNet()
+    installation = install_maskattn(unet, MaskAttnConfig(stage="mid", gate_sharing="stage", gate_hidden_dim=4))
+    checkpoint = save_maskattn_checkpoint(unet, tmp_path / "gates.pt", installation=installation, global_step=1)
+    assert len(torch.load(checkpoint, weights_only=True)["gate_state_dict"]) == 1
+
+
+def test_checkpoint_with_no_optimizer_steps_is_not_trained(tmp_path) -> None:
+    unet = FakeUNet()
+    installation = install_maskattn(unet, MaskAttnConfig(stage="mid", gate_hidden_dim=4))
+    checkpoint = save_maskattn_checkpoint(unet, tmp_path / "gates.pt", installation=installation, global_step=0)
+    assert torch.load(checkpoint, weights_only=True)["checkpoint_kind"] == "test_only"
+
+
+def test_unknown_config_keys_are_rejected() -> None:
+    with pytest.raises(ValueError, match="share_gate_heads_by_stage"):
+        MaskAttnConfig.from_mapping({"share_gate_heads_by_stage": True})

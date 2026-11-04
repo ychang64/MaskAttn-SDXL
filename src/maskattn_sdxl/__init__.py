@@ -8,6 +8,7 @@ __all__ = [
     "MaskAttnConfig",
     "MaskGateHead",
     "hard_gate_with_ste",
+    "masked_attention",
     "install_maskattn",
     "load_maskattn_checkpoint",
     "save_maskattn_checkpoint",
@@ -16,10 +17,10 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name in {"MaskGateHead", "hard_gate_with_ste"}:
-        from .gating import MaskGateHead, hard_gate_with_ste
+    if name in {"MaskGateHead", "hard_gate_with_ste", "masked_attention"}:
+        from . import gating
 
-        return {"MaskGateHead": MaskGateHead, "hard_gate_with_ste": hard_gate_with_ste}[name]
+        return getattr(gating, name)
     if name in {"MaskAttnConfig", "install_maskattn", "load_maskattn_checkpoint", "save_maskattn_checkpoint"}:
         from .model import MaskAttnConfig, install_maskattn, load_maskattn_checkpoint, save_maskattn_checkpoint
 

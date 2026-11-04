@@ -1,20 +1,35 @@
 # Baselines use the common outputs/<baseline>/images + metadata.jsonl layout.
 # This repository does not download their large weights automatically.
+# resolution is each model's native size; PixArt uses its pipeline's recommended sampling settings.
 baselines:
   sd15:
-    model_id: runwayml/stable-diffusion-v1-5
-    prepare_command: huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/sd15
+    model_id: stable-diffusion-v1-5/stable-diffusion-v1-5
+    model_path: models/sd15
+    resolution: 512
+    prepare_command: huggingface-cli download stable-diffusion-v1-5/stable-diffusion-v1-5 --local-dir models/sd15
   sd21_base:
     model_id: stabilityai/stable-diffusion-2-1-base
+    model_path: models/sd21-base
+    resolution: 512
     prepare_command: huggingface-cli download stabilityai/stable-diffusion-2-1-base --local-dir models/sd21-base
   sdxl:
     model_id: stabilityai/stable-diffusion-xl-base-1.0
+    model_path: models/stable-diffusion-xl-base-1.0
+    resolution: 1024
     prepare_command: huggingface-cli download stabilityai/stable-diffusion-xl-base-1.0 --local-dir models/stable-diffusion-xl-base-1.0
   pixart_alpha:
     model_id: PixArt-alpha/PixArt-XL-2-1024-MS
+    model_path: models/pixart-alpha
+    resolution: 1024
+    num_inference_steps: 20
+    guidance_scale: 4.5
     prepare_command: huggingface-cli download PixArt-alpha/PixArt-XL-2-1024-MS --local-dir models/pixart-alpha
   pixart_sigma:
     model_id: PixArt-alpha/PixArt-Sigma-XL-2-1024-MS
+    model_path: models/pixart-sigma
+    resolution: 1024
+    num_inference_steps: 20
+    guidance_scale: 4.5
     prepare_command: huggingface-cli download PixArt-alpha/PixArt-Sigma-XL-2-1024-MS --local-dir models/pixart-sigma
   composable_diffusion:
     adapter: external

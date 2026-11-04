@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 from pathlib import Path
 from typing import Any, Iterable
@@ -39,6 +40,12 @@ def read_prompt_records(path: str | Path, *, limit: int | None = None) -> list[d
     return records
 
 
+def prompt_token_labels(tokenizer, prompt: str) -> list[str]:
+    """Label every non-padding position of the attention's token axis, BOS and EOS included."""
+    input_ids = tokenizer(prompt, truncation=True, max_length=tokenizer.model_max_length).input_ids
+    return tokenizer.convert_ids_to_tokens(input_ids)
+
+
 def _load_pipeline_for_generation(config: dict[str, Any]):
     method = config.get("method", "maskattn")
     if method == "sdxl":
@@ -48,7 +55,6 @@ def _load_pipeline_for_generation(config: dict[str, Any]):
             dtype=config["model"].get("dtype", "auto"),
             local_files_only=True,
             allow_download=bool(config["model"].get("allow_download", False)),
-            disable_safety_checker=bool(config.get("disable_safety_checker", False)),
         )
         processor_count = sum(1 for processor in pipe.unet.attn_processors.values() if type(processor).__name__ == "MaskAttnProcessor")
         if processor_count:
@@ -69,7 +75,6 @@ def _load_pipeline_for_generation(config: dict[str, Any]):
         dtype=config["model"].get("dtype", "auto"),
         local_files_only=True,
         allow_download=bool(config["model"].get("allow_download", False)),
-        disable_safety_checker=bool(config.get("disable_safety_checker", False)),
     )
     return pipe, installation, audit
 
@@ -108,8 +113,12 @@ def generate_records(config: dict[str, Any], records: Iterable[dict[str, Any]], 
                 runtime_audit = assert_maskattn_ready(pipe.unet, checkpoint_required=True, require_forward_calls=True)
             mask_dir = None
             if save_masks:
-                token_labels = pipe.tokenizer.tokenize(prompt)
-                mask_dir = save_token_masks(collect_recorded_masks(pipe.unet), run_dir / "masks", sample_name=f"{index:05d}", token_labels=token_labels)
+                mask_dir = save_token_masks(
+                    collect_recorded_masks(pipe.unet),
+                    run_dir / "masks",
+                    sample_name=f"{index:05d}",
+                    token_labels=prompt_token_labels(pipe.tokenizer, prompt),
+                )
                 set_mask_recording(pipe.unet, False)
             output = {
                 "index": index,
@@ -122,6 +131,11 @@ def generate_records(config: dict[str, Any], records: Iterable[dict[str, Any]], 
                 "runtime_audit": runtime_audit,
             }
             metadata.write(json.dumps(output, ensure_ascii=False) + "\n")
+    # Callers run baseline and MaskAttn generation back to back, so release this pipeline first.
+    del pipe, installation
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return run_dir
 
 

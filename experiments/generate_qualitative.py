@@ -7,13 +7,13 @@ import argparse
 import json
 from pathlib import Path
 
-from _common import ROOT, add_common_arguments, execute_mode, resolve_config
+from _common import MASKATTN_DEFAULTS, ROOT, add_common_arguments, execute_mode, resolve_config
 
 DEFAULTS = {
     "model": {"path": "models/stable-diffusion-xl-base-1.0", "device": "auto", "dtype": "auto"},
     "method": "maskattn",
     "checkpoint": None,
-    "maskattn": {"stage": "mid", "placement": "encoder_decoder", "threshold": 0.5, "negative_value": -10000.0, "gate_hidden_dim": 128},
+    "maskattn": dict(MASKATTN_DEFAULTS),
     "prompts": "configs/prompts_qualitative.jsonl",
     "output_dir": "outputs/qualitative",
     "seed": 2026,

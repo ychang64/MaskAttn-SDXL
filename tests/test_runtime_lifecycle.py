@@ -8,6 +8,7 @@ from maskattn_sdxl.model import (
     MaskAttnConfig,
     assert_maskattn_device_consistency,
     assert_maskattn_ready,
+    gate_state_dict,
     install_maskattn,
     load_maskattn_checkpoint,
     save_maskattn_checkpoint,
@@ -124,6 +125,7 @@ def test_checkpoint_tensors_are_loaded_into_the_current_processors(tmp_path) -> 
     target = FakeUNet()
     install_maskattn(target, config)
     payload = load_maskattn_checkpoint(target, checkpoint)
-    current = {key: value.detach().cpu() for key, value in target.state_dict().items() if ".processor.gate_head." in key}
+    current = gate_state_dict(target)
     assert current.keys() == payload["gate_state_dict"].keys()
-    assert all(torch.equal(current[key], payload["gate_state_dict"][key]) for key in current)
+    for name, state in current.items():
+        assert all(torch.equal(value, payload["gate_state_dict"][name][key]) for key, value in state.items())

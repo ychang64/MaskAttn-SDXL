@@ -8,11 +8,29 @@
 pip install -e '.[metrics]'
 ```
 
-It requires a local directory of real images paired with the chosen caption split. Do not mix COCO's 3,000-caption protocol with Flickr30k's 500-caption protocol in one aggregate result.
+It requires a local directory of real images paired with the chosen caption split; `scripts/prepare_eval_prompts.py` builds both. Do not mix COCO's 3,000-caption protocol with Flickr30k's 500-caption protocol in one aggregate result.
+
+For a baseline, generate first and then reuse its images:
+
+```bash
+python experiments/generate_baseline.py --baseline sd15 --set prompts=data/coco_val2014_3000_prompts.jsonl
+python experiments/eval_quality.py --config configs/eval_quality.yaml --set method=sd15 \
+  --images-dir outputs/baseline_sd15/images --output-dir outputs/baseline_sd15
+```
 
 ## Official compositional evaluators
 
-Prepare the official T2I-CompBench++/UniDet or GenEval evaluator and pass an explicit command template:
+Generate images for the benchmark's own prompts, then score them with the official evaluator:
+
+```bash
+python experiments/eval_quality.py --config configs/eval_quality.yaml --skip-metrics \
+  --set checkpoint=/path/to/gate_final.pt \
+  --set prompts=data/t2i_compbench_spatial_prompts.jsonl \
+  --set num_samples=<number of prompts> \
+  --set output_dir=outputs/eval_compositional
+```
+
+Prepare the official T2I-CompBench++/UniDet or GenEval evaluator and pass an explicit command template. Check its expected image file names first; this adapter has not been run against the official evaluators.
 
 ```bash
 python experiments/eval_compositional.py \
@@ -20,7 +38,7 @@ python experiments/eval_compositional.py \
   --evaluator-command 'python /path/to/official_evaluator.py --images {images} --prompts {prompts} --output {output}'
 ```
 
-`{images}`, `{prompts}`, and `{output}` are replaced with absolute paths.
+`{images}`, `{prompts}`, and `{output}` are replaced with absolute paths. Windows paths are supported.
 
 ## Baselines
 
@@ -38,4 +56,4 @@ Use `python scripts/prepare_baselines.py --name <name>` to print an explicit che
 
 ## Efficiency comparisons
 
-`benchmark_efficiency.py` measures warmup-separated repeated generation under one prompt, inference-step count, guidance scale, dtype, and device. ControlNet and GLIGEN comparison settings are recorded in `configs/efficiency_adapters.yaml`; they use their official implementation plus, respectively, a conditioning image or grounding boxes/phrases.
+`benchmark_efficiency.py` measures warmup-separated repeated generation under one prompt, inference-step count, guidance scale, dtype, and device. It holds one pipeline on the GPU at a time, so neither result includes the other's memory. ControlNet and GLIGEN comparison settings are recorded in `configs/efficiency_adapters.yaml`; they use their official implementation plus, respectively, a conditioning image or grounding boxes/phrases.

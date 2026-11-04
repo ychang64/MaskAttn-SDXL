@@ -1,14 +1,13 @@
-"""A Diffusers-compatible cross-attention processor with pre-softmax MaskAttn bias."""
+"""A Diffusers-compatible cross-attention processor with pre-softmax MaskAttn gating."""
 
 from __future__ import annotations
 
 from typing import Optional
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .gating import GateResult, MaskGateHead, hard_gate_with_ste
+from .gating import GateResult, MaskGateHead, hard_gate_with_ste, masked_attention
 
 
 def _valid_tokens_from_attention_mask(
@@ -38,9 +37,9 @@ def _valid_tokens_from_attention_mask(
 class MaskAttnProcessor(nn.Module):
     """Drop-in processor for Diffusers ``Attention`` modules.
 
-    It mirrors Diffusers' ``AttnProcessor2_0`` projections and output path, but calls scaled-dot-product attention
-    with an additive gate bias of shape ``[B, 1, N, T]``. The gate is therefore applied to QK logits before softmax.
-    It intentionally targets cross-attention only; installation rejects self-attention processors.
+    It mirrors the projections and output path of Diffusers' ``AttnProcessor2_0`` and replaces the attention with
+    Eq. (4). The output A then enters SDXL's own frozen BasicTransformerBlock, whose residual GELU feed-forward
+    network is the FFN of Eq. (5). Cross-attention only; installation rejects self-attention processors.
     """
 
     def __init__(
@@ -59,6 +58,7 @@ class MaskAttnProcessor(nn.Module):
         self.record_masks = False
         self.record_attention = True
         self.last_gate: Optional[dict[str, Tensor]] = None
+        self.last_open_fraction: Optional[Tensor] = None
         self.register_buffer("_forward_calls", torch.zeros((), dtype=torch.long), persistent=False)
 
     @property
@@ -74,14 +74,16 @@ class MaskAttnProcessor(nn.Module):
         if not enabled:
             self.last_gate = None
 
-    def _record(self, result: GateResult) -> None:
+    def _record(self, gate: GateResult, weights: Tensor) -> None:
         if not self.record_masks:
             return
-        # CPU copies intentionally sever the graph and keep qualitative visualisation bounded to an explicit mode.
+        # CPU copies sever the graph and keep qualitative visualisation bounded to an explicit mode.
         self.last_gate = {
-            "probabilities": result.probabilities.detach().float().cpu(),
-            "hard_gate": result.hard_gate.detach().float().cpu(),
+            "probabilities": gate.probabilities.detach().float().cpu(),
+            "hard_gate": gate.hard_gate.detach().float().cpu(),
         }
+        if self.record_attention:
+            self.last_gate["attention"] = weights.detach().float().mean(dim=1).cpu()
 
     def forward(
         self,
@@ -114,15 +116,16 @@ class MaskAttnProcessor(nn.Module):
         token_count = encoder_hidden_states.shape[1]
         valid_tokens = _valid_tokens_from_attention_mask(attention_mask, batch, token_count, hidden_states.device)
 
-        # Gate MLPs remain fp32 for stable sigmoid/STE arithmetic under fp16 mixed precision.
-        probabilities = self.gate_head(hidden_states.float(), gate_text.float())
-        gate = hard_gate_with_ste(
-            probabilities,
-            threshold=self.threshold,
-            negative_value=self.negative_value,
-            valid_tokens=valid_tokens,
-        )
-        self._record(gate)
+        # Gates stay in fp32 even inside the autocast context used for training, so they match inference.
+        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            probabilities = self.gate_head(hidden_states.float(), gate_text.float())
+            gate = hard_gate_with_ste(
+                probabilities,
+                threshold=self.threshold,
+                negative_value=self.negative_value,
+                valid_tokens=valid_tokens,
+            )
+        self.last_open_fraction = gate.hard_gate.detach().mean()
 
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
@@ -143,8 +146,7 @@ class MaskAttnProcessor(nn.Module):
         if attn.norm_k is not None:
             key = attn.norm_k(key)
 
-        # Gate bias is broadcast across heads. SDPA adds it to QK^T / sqrt(d) before its softmax.
-        attn_mask = gate.additive_mask[:, None].to(dtype=query.dtype)
+        attention_bias = None
         if attention_mask is not None:
             prepared = attn.prepare_attention_mask(attention_mask, token_count, batch)
             prepared = prepared.view(batch, attn.heads, -1, prepared.shape[-1])
@@ -154,18 +156,12 @@ class MaskAttnProcessor(nn.Module):
                     torch.zeros((), device=query.device, dtype=query.dtype),
                     torch.full((), self.negative_value, device=query.device, dtype=query.dtype),
                 )
-            attn_mask = attn_mask + prepared.to(dtype=query.dtype)
+            attention_bias = prepared.to(dtype=query.dtype)
 
-        if self.record_masks and self.record_attention and self.last_gate is not None:
-            # SDPA does not expose probabilities. Recompute only in explicit qualitative-recording mode;
-            # this does not affect the actual attention path or gradients.
-            with torch.no_grad():
-                scale = float(getattr(attn, "scale", head_dim**-0.5))
-                scores = torch.matmul(query.float(), key.float().transpose(-1, -2)) * scale
-                scores = scores + attn_mask.float()
-                self.last_gate["attention"] = torch.softmax(scores, dim=-1).mean(dim=1).cpu()
+        # The gate is broadcast across heads, as stated after Eq. (3).
+        attended, weights = masked_attention(query, key, value, gate, attention_bias=attention_bias)
+        self._record(gate, weights)
 
-        attended = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
         hidden_states = attended.transpose(1, 2).reshape(batch, -1, attn.heads * head_dim).to(query.dtype)
         hidden_states = attn.to_out[0](hidden_states)
         hidden_states = attn.to_out[1](hidden_states)

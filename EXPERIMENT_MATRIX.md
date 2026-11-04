@@ -6,8 +6,8 @@ Every row below has an executable entry point and a configuration. Metrics are w
 |---|---|---|---|---|---|
 | Sec. III, Eq. (1)–(5), Fig. 2 | Frozen-SDXL MaskAttn training | `experiments/train_maskattn_sdxl.py` | `configs/train_512.yaml`, `configs/train_1024.yaml` | filtered COCO train2014 cache | `outputs/train_*/`: `config.resolved.yaml`, `environment.json`, loss JSONL, `checkpoints/gate_*.pt` |
 | Sec. IV-A training protocol | Build/cache captions containing >=2 noun phrases | `scripts/prepare_coco_captions.py` | CLI | COCO `captions_train2014.json`, images | `data/coco_train2014_multi_noun.jsonl` |
-| Table I | COCO val2014 caption quality (3,000) | `experiments/eval_quality.py` | `configs/eval_quality.yaml` | COCO 3k prompt JSONL + matching real-image directory | `outputs/eval_quality_coco/images/`, `metadata.jsonl`, `metrics.json`, `metrics.csv` (FID/CLIP/precision/recall) |
-| Table I | Flickr30k caption quality (500) | `experiments/eval_quality.py` | `configs/eval_quality.yaml` + documented CLI overrides | Flickr30k 500 prompt JSONL + real-image directory | `outputs/eval_quality_flickr30k/` with the same files |
+| Table I | COCO val2014 caption quality (3,000) | `scripts/prepare_eval_prompts.py`, `experiments/eval_quality.py` | `configs/eval_quality.yaml` | COCO 3k prompt JSONL + matching real-image directory | `outputs/eval_quality_coco/images/`, `metadata.jsonl`, `metrics.json`, `metrics.csv` (FID/CLIP/precision/recall) |
+| Table I | Flickr30k caption quality (500) | `scripts/prepare_eval_prompts.py`, `experiments/eval_quality.py` | `configs/eval_quality.yaml` + documented CLI overrides | Flickr30k 500 prompt JSONL + real-image directory | `outputs/eval_quality_flickr30k/` with the same files |
 | Fig. 3 | Precision/recall evaluation | `experiments/eval_quality.py` | `configs/eval_quality.yaml` | same generated/reference images as Table I | aggregate `metrics.json` / `metrics.csv` |
 | Table II | T2I-CompBench++ Spatial / UniDet | `experiments/eval_compositional.py` | `configs/eval_compositional.yaml` | official prompt split + generated images + official evaluator | `outputs/eval_compositional/metrics/` written by the official adapter |
 | Table II | GenEval | `experiments/eval_compositional.py` | `configs/eval_compositional.yaml` + `benchmark=geneval` | official GenEval prompts/images/evaluator | configured official evaluator output directory |
@@ -24,7 +24,7 @@ All baselines use `experiments/generate_baseline.py` where a compatible local pi
 | Paper baseline | Configuration key | Generation path |
 |---|---|---|
 | SD-1.5 | `sd15` | local Diffusers pipeline |
-| SD-2.1-base | `sd21_base` | local Diffusers pipeline |
+| SD-2.1-base | `sd21_base` | local Diffusers pipeline; see the access note in [docs/PAPER_AUDIT.md](docs/PAPER_AUDIT.md) |
 | SDXL | `sdxl` | local Diffusers pipeline |
 | PixArt-α | `pixart_alpha` | local compatible PixArt pipeline |
 | PixArt-Σ | `pixart_sigma` | local compatible PixArt pipeline |
@@ -34,7 +34,7 @@ All baselines use `experiments/generate_baseline.py` where a compatible local pi
 
 ## Stage mapping
 
-This repository maps `down_blocks.1`/`up_blocks.1` to high, `down_blocks.2`/`up_blocks.0` to mid, and `mid_block` to low. The selected paths are persisted in the gate checkpoint sidecar and resolved configuration.
+This repository maps `down_blocks.1`/`up_blocks.1` to high, `down_blocks.2`/`up_blocks.0` to mid, and `mid_block` to low. SDXL has cross-attention at two resolutions only, so mid and low run at the same size and differ by U-Net depth. The default mid stage covers 50 cross-attention layers in 5 spatial transformers. The selected paths are persisted in the gate checkpoint sidecar and resolved configuration.
 
 ## Runtime requirements
 
